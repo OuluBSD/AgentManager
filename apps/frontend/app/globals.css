@@ -30,7 +30,7 @@ body {
 
 .columns {
   display: grid;
-  grid-template-columns: 0.55fr 0.5fr 0.5fr 2fr;
+  grid-template-columns: 0.4fr 0.35fr 0.35fr 2.5fr;
   gap: 12px;
 }
 
