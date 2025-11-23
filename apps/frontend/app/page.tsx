@@ -70,6 +70,7 @@ export default function Page() {
   const [activeUser, setActiveUser] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"Chat" | "Terminal" | "Code">("Chat");
 
   const ensureStatus = async (roadmapId: string, token: string) => {
@@ -234,6 +235,15 @@ export default function Page() {
   };
 
   const handleLoginSubmit = async () => {
+    if (!username) {
+      setLoginError("Username is required");
+      return;
+    }
+    if (!password && !keyfileToken) {
+      setLoginError("Provide a password or keyfile token");
+      return;
+    }
+    setLoginError(null);
     setLoading(true);
     setError(null);
     try {
@@ -241,6 +251,7 @@ export default function Page() {
       await hydrateWorkspace(token, username);
     } catch (err) {
       setError("Login failed; using mock data");
+      setLoginError(err instanceof Error ? err.message : "Login failed");
       setSessionToken(null);
       setActiveUser(null);
       setProjects(mockProjects);
@@ -309,6 +320,7 @@ export default function Page() {
             {loading ? "Loading…" : "Login"}
           </button>
         </div>
+        {loginError && <div className="item-subtle" style={{ color: "#EF4444" }}>{loginError}</div>}
         <div className="item-subtle">
           {activeUser && sessionToken
             ? `Active user: ${activeUser} (token ${sessionToken.slice(0, 6)}…)`
