@@ -64,6 +64,9 @@ export default function Page() {
   const [roadmapStatus, setRoadmapStatus] = useState<
     Record<string, { status: Status; progress: number; summary?: string }>
   >({});
+  const [username, setUsername] = useState(DEMO_USERNAME);
+  const [password, setPassword] = useState(DEMO_PASSWORD);
+  const [keyfileToken, setKeyfileToken] = useState(DEMO_KEYFILE ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"Chat" | "Terminal" | "Code">("Chat");
@@ -162,6 +165,29 @@ export default function Page() {
     }
   };
 
+  const hydrateWorkspace = async (token: string) => {
+    setSessionToken(token);
+    const projectData = await fetchProjects(token);
+    const mappedProjects = projectData.map((p) => ({
+      id: p.id,
+      name: p.name,
+      category: p.category ?? "Uncategorized",
+      status: (p.status as Status) ?? "active",
+      info: p.description ?? "",
+    }));
+    setProjects(mappedProjects);
+    const primary = projectData[0];
+    if (primary) {
+      setSelectedProjectId(primary.id);
+      await loadRoadmapsForProject(primary.id, token);
+    } else {
+      setRoadmaps([]);
+      setChats([]);
+      setSelectedProjectId(null);
+      setSelectedRoadmapId(null);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -170,27 +196,11 @@ export default function Page() {
       try {
         const { token } = await login(DEMO_USERNAME, DEMO_PASSWORD, DEMO_KEYFILE || undefined);
         if (cancelled) return;
-        setSessionToken(token);
-
-        const projectData = await fetchProjects(token);
-        if (cancelled) return;
-        const mappedProjects = projectData.map((p) => ({
-          id: p.id,
-          name: p.name,
-          category: p.category ?? "Uncategorized",
-          status: (p.status as Status) ?? "active",
-          info: p.description ?? "",
-        }));
-        setProjects(mappedProjects);
-
-        const primary = projectData[0];
-        if (primary) {
-          setSelectedProjectId(primary.id);
-          await loadRoadmapsForProject(primary.id, token);
-        }
+        await hydrateWorkspace(token);
       } catch (err) {
         if (!cancelled) {
           setError("Using mock data (backend unreachable)");
+          setSessionToken(null);
           setProjects(mockProjects);
           setRoadmaps(mockRoadmaps);
           setChats(mockChats);
@@ -217,6 +227,23 @@ export default function Page() {
     if (sessionToken) {
       setSelectedRoadmapId(null);
       await loadRoadmapsForProject(projectId, sessionToken);
+    }
+  };
+
+  const handleLoginSubmit = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { token } = await login(username, password, keyfileToken || undefined);
+      await hydrateWorkspace(token);
+    } catch (err) {
+      setError("Login failed; using mock data");
+      setSessionToken(null);
+      setProjects(mockProjects);
+      setRoadmaps(mockRoadmaps);
+      setChats(mockChats);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -251,6 +278,34 @@ export default function Page() {
 
   return (
     <main className="page">
+      <div className="panel-card" style={{ marginBottom: 12 }}>
+        <div className="panel-title">Login</div>
+        <div className="panel-text">Use environment defaults or override to test other users.</div>
+        <div className="login-row">
+          <input
+            className="filter"
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+          <input
+            className="filter"
+            placeholder="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <input
+            className="filter"
+            placeholder="Keyfile token (optional)"
+            value={keyfileToken}
+            onChange={(e) => setKeyfileToken(e.target.value)}
+          />
+          <button className="tab" onClick={handleLoginSubmit} disabled={loading}>
+            {loading ? "Loading…" : "Login"}
+          </button>
+        </div>
+      </div>
       <div className="columns">
         <div className="column">
           <header className="column-header">
