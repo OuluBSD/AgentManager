@@ -148,6 +148,7 @@ Both commands exit silently with code 0 when type checks pass.
 
 Database:
 - Set `DATABASE_URL` in `.env` to a Postgres instance.
+- Backend will auto-connect if `DATABASE_URL` is present; otherwise it falls back to the in-memory mock store.
 - Generate migrations from the shared schema: `pnpm exec drizzle-kit generate` (writes to `packages/shared/db/migrations`).
 - Apply migrations with your preferred tool (e.g., `drizzle-kit push` or `psql`).
 

@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { registerRoutes } from "./routes";
 import { loadEnv } from "./utils/env";
+import { dbPlugin } from "./plugins/db";
 
 async function start() {
   const env = loadEnv(process.env);
@@ -10,6 +11,7 @@ async function start() {
 
   await app.register(cors, { origin: true, credentials: true });
   await app.register(websocket);
+  await app.register(dbPlugin);
 
   app.get("/health", async () => ({ status: "ok" }));
   await app.register(registerRoutes, { prefix: "/api" });
