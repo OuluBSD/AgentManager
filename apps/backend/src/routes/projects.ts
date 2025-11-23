@@ -20,7 +20,7 @@ import { requireSession } from "../utils/auth";
 
 export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/projects", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     if (fastify.db) {
       try {
         return await dbListProjects(fastify.db);
@@ -32,7 +32,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/projects", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     if (fastify.db) {
       try {
         const project = await dbCreateProject(fastify.db, (request.body as Record<string, unknown>) ?? {});
@@ -48,7 +48,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch("/projects/:projectId", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const projectId = request.params as { projectId: string };
     if (fastify.db) {
       try {
@@ -77,7 +77,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/projects/:projectId/details", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const projectId = (request.params as { projectId: string }).projectId;
     if (fastify.db) {
       try {
@@ -106,7 +106,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/projects/:projectId/snapshots", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const projectId = (request.params as { projectId: string }).projectId;
     const body = request.body as { message?: string };
     if (fastify.db) {
@@ -124,7 +124,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/projects/:projectId/snapshots", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const projectId = (request.params as { projectId: string }).projectId;
     if (fastify.db) {
       try {

@@ -5,7 +5,7 @@ import { requireSession } from "../utils/auth";
 
 export const templateRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/templates", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     if (fastify.db) {
       try {
         reply.send(await dbListTemplates(fastify.db));
@@ -18,7 +18,7 @@ export const templateRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/templates", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     if (fastify.db) {
       try {
         const template = await dbCreateTemplate(fastify.db, (request.body as Record<string, unknown>) ?? {});
@@ -33,7 +33,7 @@ export const templateRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch("/templates/:templateId", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const templateId = (request.params as { templateId: string }).templateId;
     if (fastify.db) {
       try {

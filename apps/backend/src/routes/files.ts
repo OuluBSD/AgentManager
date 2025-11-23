@@ -14,7 +14,7 @@ function sanitizePath(input: string) {
 
 export const fileRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/fs/tree", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const inputPath = ((request.query as { path?: string }).path ?? "/").replace(/^\//, "");
     const safePath = sanitizePath(inputPath);
     if (!safePath) {
@@ -33,7 +33,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/fs/file", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const query = request.query as { path?: string };
     const safePath = sanitizePath((query.path ?? "").replace(/^\//, ""));
     if (!safePath) {
@@ -48,7 +48,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/fs/write", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const body = request.body as { path: string; content: string; baseSha?: string };
     const safePath = sanitizePath((body?.path ?? "").replace(/^\//, ""));
     if (!safePath) {
@@ -60,7 +60,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/fs/diff", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const query = request.query as { path?: string; baseSha?: string; targetSha?: string };
     reply.send({
       path: query.path,

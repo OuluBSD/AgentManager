@@ -11,7 +11,7 @@ import { requireSession } from "../utils/auth";
 
 export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/roadmaps/:roadmapId/chats", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const roadmapId = (request.params as { roadmapId: string }).roadmapId;
     if (fastify.db) {
       try {
@@ -25,7 +25,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/roadmaps/:roadmapId/chats", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const roadmapId = (request.params as { roadmapId: string }).roadmapId;
     if (fastify.db) {
       try {
@@ -45,7 +45,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/roadmaps/:roadmapId/chats/from-template", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const roadmapId = (request.params as { roadmapId: string }).roadmapId;
     const body = request.body as { templateId: string; title?: string; goal?: string; metadata?: unknown };
     const payload = {
@@ -68,7 +68,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch("/chats/:chatId", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const chatId = (request.params as { chatId: string }).chatId;
     if (fastify.db) {
       try {
@@ -96,7 +96,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/chats/:chatId/messages", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const chatId = (request.params as { chatId: string }).chatId;
     if (fastify.db) {
       try {
@@ -110,7 +110,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/chats/:chatId/messages", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const chatId = (request.params as { chatId: string }).chatId;
     const body = request.body as { role: "user" | "assistant" | "system" | "status" | "meta"; content: string };
     if (fastify.db) {
@@ -134,7 +134,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/chats/:chatId/status", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const chatId = (request.params as { chatId: string }).chatId;
     const body = request.body as { status?: string; progress?: number; focus?: string };
     const patch = {

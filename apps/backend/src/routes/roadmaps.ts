@@ -5,7 +5,7 @@ import { requireSession } from "../utils/auth";
 
 export const roadmapRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/projects/:projectId/roadmaps", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const projectId = (request.params as { projectId: string }).projectId;
     if (fastify.db) {
       try {
@@ -19,7 +19,7 @@ export const roadmapRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/projects/:projectId/roadmaps", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const projectId = (request.params as { projectId: string }).projectId;
     if (fastify.db) {
       try {
@@ -39,7 +39,7 @@ export const roadmapRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch("/roadmaps/:roadmapId", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const roadmapId = (request.params as { roadmapId: string }).roadmapId;
     if (fastify.db) {
       try {
@@ -67,7 +67,7 @@ export const roadmapRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/roadmaps/:roadmapId/meta-chat", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const roadmapId = (request.params as { roadmapId: string }).roadmapId;
     if (fastify.db) {
       try {
@@ -91,7 +91,7 @@ export const roadmapRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/roadmaps/:roadmapId/status", async (request, reply) => {
-    if (!requireSession(request, reply)) return;
+    if (!(await requireSession(request, reply))) return;
     const roadmapId = (request.params as { roadmapId: string }).roadmapId;
     if (fastify.db) {
       try {
