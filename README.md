@@ -124,6 +124,7 @@ For endpoint-level details, see `ARCHITECTURE.md`.
 # 🚀 Getting Started (Development)
 ```bash
 pnpm install
+pnpm dev:backend   # http://localhost:3001
 pnpm dev:frontend
 ```
 
@@ -131,6 +132,11 @@ You will need:
 - an LLM key (OpenAI/Anthropic/Qwen)
 - configured project directories
 - database setup (Drizzle/Postgres)
+
+Tests:
+```bash
+pnpm --filter @nexus/shared test
+```
 
 ---
 
