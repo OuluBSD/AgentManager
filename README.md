@@ -144,13 +144,19 @@ pnpm --filter @nexus/shared test
 TypeScript/TS server:
 - Project-local compiler: `pnpm --filter nexus-backend exec tsc -p tsconfig.json`
 - Generic one-shot: `pnpm --package=typescript dlx tsc -p apps/backend/tsconfig.json`
-Both commands exit silently with code 0 when type checks pass.
+- Calling `tsc` directly will fail unless you add it to PATH; rely on the commands above.
+- Successful runs are intentionally silent (exit code 0, no stdout).
 
 Database:
 - Set `DATABASE_URL` in `.env` to a Postgres instance.
 - Backend will auto-connect if `DATABASE_URL` is present; otherwise it falls back to the in-memory mock store.
 - Generate migrations from the shared schema: `pnpm exec drizzle-kit generate` (writes to `packages/shared/db/migrations`).
 - Apply migrations with your preferred tool (e.g., `drizzle-kit push` or `psql`).
+
+Auth:
+- When the database is enabled, `/auth/login` will create a user on first login; the first provided password becomes the stored hash.
+- If a user already has a password set, a password is required for login; otherwise the route rejects with 401.
+- Sessions persist in the database; without `DATABASE_URL` the backend falls back to in-memory sessions (cleared on restart).
 
 Frontend ↔ Backend:
 - The mock UI will attempt to `POST /api/auth/login` then `GET /api/projects` using `NEXT_PUBLIC_BACKEND_HTTP_BASE` (defaults to `http://localhost:3001`). If unreachable, it falls back to mock data and shows a notice.
