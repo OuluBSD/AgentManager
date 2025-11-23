@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchChats, fetchProjects, fetchRoadmapStatus, fetchRoadmaps, login } from "../lib/api";
 
 type Status = "inactive" | "waiting" | "active" | "blocked" | "done" | "in_progress" | "idle" | "error";
+const DEMO_USERNAME = process.env.NEXT_PUBLIC_DEMO_USERNAME ?? "demo";
+const DEMO_PASSWORD = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "demo";
+const DEMO_KEYFILE = process.env.NEXT_PUBLIC_DEMO_KEYFILE_TOKEN;
 
 type ProjectItem = { id?: string; name: string; category: string; status: Status; info: string };
 type RoadmapItem = {
@@ -116,14 +119,56 @@ export default function Page() {
     }
   };
 
+  const loadRoadmapsForProject = async (projectId: string, token: string) => {
+    const roadmapData = await fetchRoadmaps(token, projectId);
+    const statusPairs = await Promise.all(
+      roadmapData.map(async (r) => {
+        try {
+          const status = await fetchRoadmapStatus(token, r.id);
+          return [
+            r.id,
+            {
+              status: (status.status as Status) ?? "active",
+              progress: status.progress ?? 0,
+              summary: status.summary,
+            },
+          ] as const;
+        } catch {
+          return [r.id, null] as const;
+        }
+      })
+    );
+    const statusMap = Object.fromEntries(
+      statusPairs.filter(([, value]) => value !== null) as [string, { status: Status; progress: number; summary?: string }][]
+    );
+    setRoadmapStatus((prev) => ({ ...prev, ...statusMap }));
+    const mappedRoadmaps = roadmapData.map((r) => ({
+      id: r.id,
+      title: r.title,
+      tags: r.tags ?? [],
+      status: (statusMap[r.id]?.status ?? (r.status as Status) ?? "active") as Status,
+      progress: statusMap[r.id]?.progress ?? r.progress ?? 0,
+      metaChatId: r.metaChatId,
+      summary: statusMap[r.id]?.summary,
+    }));
+    setRoadmaps(mappedRoadmaps);
+    const firstRoadmapId = roadmapData[0]?.id;
+    if (firstRoadmapId) {
+      setSelectedRoadmapId(firstRoadmapId);
+      await loadChatsForRoadmap(firstRoadmapId, token, statusMap[firstRoadmapId]);
+    } else {
+      setChats([]);
+      setSelectedRoadmapId(null);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const demoPassword = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "demo";
-        const { token } = await login("demo", demoPassword);
+        const { token } = await login(DEMO_USERNAME, DEMO_PASSWORD, DEMO_KEYFILE || undefined);
         if (cancelled) return;
         setSessionToken(token);
 
@@ -141,45 +186,7 @@ export default function Page() {
         const primary = projectData[0];
         if (primary) {
           setSelectedProjectId(primary.id);
-          const roadmapData = await fetchRoadmaps(token, primary.id);
-          if (cancelled) return;
-          const statusPairs = await Promise.all(
-            roadmapData.map(async (r) => {
-              try {
-                const status = await fetchRoadmapStatus(token, r.id);
-                return [
-                  r.id,
-                  {
-                    status: (status.status as Status) ?? "active",
-                    progress: status.progress ?? 0,
-                    summary: status.summary,
-                  },
-                ] as const;
-              } catch {
-                return [r.id, null] as const;
-              }
-            })
-          );
-          const statusMap = Object.fromEntries(
-            statusPairs.filter(([, value]) => value !== null) as [string, { status: Status; progress: number; summary?: string }][]
-          );
-          setRoadmapStatus(statusMap);
-          const mappedRoadmaps = roadmapData.map((r) => ({
-            id: r.id,
-            title: r.title,
-            tags: r.tags ?? [],
-            status: (statusMap[r.id]?.status ?? (r.status as Status) ?? "active") as Status,
-            progress: statusMap[r.id]?.progress ?? r.progress ?? 0,
-            metaChatId: r.metaChatId,
-            summary: statusMap[r.id]?.summary,
-          }));
-          setRoadmaps(mappedRoadmaps);
-
-          const firstRoadmapId = roadmapData[0]?.id;
-          if (firstRoadmapId) {
-            setSelectedRoadmapId(firstRoadmapId);
-            await loadChatsForRoadmap(firstRoadmapId, token, statusMap[firstRoadmapId]);
-          }
+          await loadRoadmapsForProject(primary.id, token);
         }
       } catch (err) {
         if (!cancelled) {
@@ -202,6 +209,14 @@ export default function Page() {
     setSelectedRoadmapId(roadmapId);
     if (sessionToken) {
       await loadChatsForRoadmap(roadmapId, sessionToken, roadmapStatus[roadmapId]);
+    }
+  };
+
+  const handleSelectProject = async (projectId: string) => {
+    setSelectedProjectId(projectId);
+    if (sessionToken) {
+      setSelectedRoadmapId(null);
+      await loadRoadmapsForProject(projectId, sessionToken);
     }
   };
 
@@ -246,7 +261,11 @@ export default function Page() {
           {error && <div className="item-subtle">{error}</div>}
           <div className="list">
             {projects.map((p) => (
-              <div className="item" key={p.name}>
+              <div
+                className={`item ${selectedProjectId === p.id ? "active" : ""}`}
+                key={p.id ?? p.name}
+                onClick={() => p.id && handleSelectProject(p.id)}
+              >
                 <div className="item-line">
                   <span className="status-dot" style={{ background: statusColor[p.status] }} />
                   <span className="item-title">{p.name}</span>
