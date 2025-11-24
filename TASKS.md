@@ -11,7 +11,7 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 - [x] Quiet Code tab hook dependency lint warnings
 - [x] Run full backend/frontend test suites after recent changes
 - [x] Add Code tab toasts for file load/diff failures
-- [ ] Remove Code tab hook dependency lint suppressions via stable callbacks
+- [x] Remove Code tab hook dependency lint suppressions via stable callbacks
 
 ---
 
