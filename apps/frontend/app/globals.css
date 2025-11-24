@@ -201,6 +201,23 @@ body {
   white-space: pre;
 }
 
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), rgba(14, 165, 233, 0.12));
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+  border-radius: 12px;
+  padding: 12px 14px;
+  z-index: 20;
+  min-width: 220px;
+}
+
+.toast-success {
+  color: #bbf7d0;
+}
+
 @media (max-width: 1200px) {
   .columns {
     grid-template-columns: repeat(2, 1fr);

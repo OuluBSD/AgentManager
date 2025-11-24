@@ -172,6 +172,7 @@ export default function Page() {
   const [fsDiffLoaded, setFsDiffLoaded] = useState(false);
   const [fsBaseSha, setFsBaseSha] = useState<string>("");
   const [fsTargetSha, setFsTargetSha] = useState<string>("HEAD");
+  const [fsToast, setFsToast] = useState<string | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditFilters, setAuditFilters] = useState<{ eventType: string; userId: string; pathContains: string; ipAddress: string }>({
     eventType: "",
@@ -664,6 +665,7 @@ export default function Page() {
       );
       setFsContent(fsDraft);
       setFsSaveStatus("Saved");
+      setFsToast(`Saved ${fsContentPath}`);
     } catch (err) {
       setFsError(err instanceof Error ? err.message : "Failed to save file");
     } finally {
@@ -693,6 +695,7 @@ export default function Page() {
     setFsDraft("");
     setFsSaving(false);
     setFsSaveStatus(null);
+    setFsToast(null);
     setFsDiff("");
     setFsDiffError(null);
     setFsDiffLoaded(false);
@@ -703,6 +706,12 @@ export default function Page() {
       loadFsTree(".");
     }
   }, [sessionToken, selectedProjectId]);
+
+  useEffect(() => {
+    if (!fsToast) return;
+    const timer = setTimeout(() => setFsToast(null), 2400);
+    return () => clearTimeout(timer);
+  }, [fsToast]);
 
   const loadAuditLog = async (
     projectId?: string,
@@ -1185,6 +1194,12 @@ export default function Page() {
           {auditLoading && <div className="item-subtle">Loading…</div>}
         </div>
       </div>
+      {fsToast && (
+        <div className="toast toast-success">
+          <span style={{ fontWeight: 700 }}>File saved</span>
+          <div className="item-subtle">{fsToast}</div>
+        </div>
+      )}
     </main>
   );
 }
