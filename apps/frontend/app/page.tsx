@@ -154,6 +154,7 @@ export default function Page() {
   const [terminalOutput, setTerminalOutput] = useState<string>("Connect to stream to see output.");
   const [terminalInput, setTerminalInput] = useState<string>("");
   const [terminalConnecting, setTerminalConnecting] = useState(false);
+  const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
   const terminalSocket = useRef<WebSocket | null>(null);
   const [fsPath, setFsPath] = useState<string>(".");
   const [fsEntries, setFsEntries] = useState<{ type: "dir" | "file"; name: string }[]>([]);
@@ -217,6 +218,7 @@ export default function Page() {
     }
     setTerminalSessionId(null);
     setTerminalOutput("Connect to stream to see output.");
+    setTerminalStatus(null);
     setFsEntries([]);
     setFsContent("");
     setFsContentPath(null);
@@ -230,6 +232,19 @@ export default function Page() {
     setFsDiffLoading(false);
     setFsBaseSha("");
     setFsTargetSha("HEAD");
+  };
+
+  const updateTerminalStatusFromText = (text: string) => {
+    if (!text) return;
+    const idleMatch = text.match(/\[session closed after (\d+)s idle timeout\]/i);
+    if (idleMatch?.[1]) {
+      setTerminalStatus(`Closed after ${idleMatch[1]}s idle timeout`);
+      return;
+    }
+    const exitMatch = text.match(/\[process exited with code ([^\\]]+)\]/i);
+    if (exitMatch?.[1]) {
+      setTerminalStatus(`Process exited (code ${exitMatch[1]})`);
+    }
   };
 
   const loadChatsForRoadmap = async (
@@ -430,23 +445,30 @@ export default function Page() {
       terminalSocket.current = null;
     }
     setTerminalConnecting(true);
+    setTerminalStatus("Connecting to terminal…");
     setTerminalOutput("Connecting to terminal…\n");
     const ws = new WebSocket(buildTerminalWsUrl(token, sessionId));
     terminalSocket.current = ws;
 
     ws.onopen = () => {
       setTerminalConnecting(false);
+      setTerminalStatus(`Connected to session ${sessionId}`);
       setTerminalOutput((prev) => `${prev}[connected to ${sessionId}]\n`);
     };
 
     ws.onmessage = (event) => {
       if (typeof event.data === "string") {
         setTerminalOutput((prev) => `${prev}${event.data}`);
+        updateTerminalStatusFromText(event.data);
       } else if (event.data instanceof Blob) {
-        event.data.text().then((text) => setTerminalOutput((prev) => `${prev}${text}`));
+        event.data.text().then((text) => {
+          setTerminalOutput((prev) => `${prev}${text}`);
+          updateTerminalStatusFromText(text);
+        });
       } else if (event.data instanceof ArrayBuffer) {
         const text = new TextDecoder().decode(new Uint8Array(event.data));
         setTerminalOutput((prev) => `${prev}${text}`);
+        updateTerminalStatusFromText(text);
       }
     };
 
@@ -454,6 +476,7 @@ export default function Page() {
       const message = (event as ErrorEvent)?.message ?? "socket error";
       setTerminalOutput((prev) => `${prev}\n[stream error: ${message}]\n`);
       setTerminalConnecting(false);
+      setTerminalStatus(`Stream error: ${message}`);
     };
     ws.onclose = (event) => {
       setTerminalConnecting(false);
@@ -465,6 +488,17 @@ export default function Page() {
         setTerminalSessionId(null);
       }
       setTerminalOutput((prev) => `${prev}\n[stream closed (${event.code}${reason ? `: ${reason}` : ""})]\n`);
+      const idleClosed = reason === "idle timeout" || event.code === 4000;
+      if (idleClosed) {
+        setTerminalStatus((prev) => prev ?? "Closed after idle timeout");
+      } else {
+        const summary = reason
+          ? `Stream closed (${reason})`
+          : event.code
+            ? `Stream closed (code ${event.code})`
+            : "Stream closed.";
+        setTerminalStatus((prev) => prev ?? summary);
+      }
     };
   };
 
@@ -474,6 +508,7 @@ export default function Page() {
       return;
     }
     setTerminalConnecting(true);
+    setTerminalStatus("Starting terminal session…");
     setTerminalOutput("Starting terminal session…\n");
     try {
       const { sessionId } = await createTerminalSession(sessionToken, selectedProjectId ?? undefined);
@@ -484,6 +519,7 @@ export default function Page() {
         `Failed to start terminal: ${err instanceof Error ? err.message : "unknown error"}\n`
       );
       setTerminalConnecting(false);
+      setTerminalStatus("Failed to start terminal session.");
     }
   };
 
@@ -736,6 +772,7 @@ export default function Page() {
                 ? `Session ${terminalSessionId}`
                 : "Start a session to stream output."}
             </div>
+            {terminalStatus && <div className="item-subtle" style={{ marginBottom: 8 }}>{terminalStatus}</div>}
             <div className="login-row" style={{ gap: 8, alignItems: "center" }}>
               <button className="tab" onClick={startTerminalSession} disabled={terminalConnecting || !sessionToken}>
                 {terminalConnecting ? "Connecting…" : terminalSessionId ? "Restart Session" : "Start Session"}
