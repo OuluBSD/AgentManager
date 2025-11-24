@@ -16,6 +16,9 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 - [x] Run full backend/frontend test suites after recent changes (backend tests + frontend lint/build passing)
 - [x] Implement initial DB models for Project/RoadmapList/ChatThread/Message
 - [x] Scaffold Projects API (list/create/update) to unblock UI wiring
+- [x] Cover Projects/Roadmaps/Chats endpoints with DB-backed tests
+- [ ] Wire Projects/Roadmaps/Chats UI to live APIs (replace mocks, handle empty DB)
+- [ ] Add a small seed or creation flow so fresh installs show demo data
 
 ---
 
@@ -35,14 +38,14 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 
 Implement DB models + TypeScript interfaces:
 
-- [ ] **Project** (name, category, theme, status, activity flags)
-- [ ] **RoadmapList** (title, tags, progress, JS logic ref)
-- [ ] **ChatThread** (title, goal, templateId, status, progress)
-- [ ] **MetaChat** (one per roadmap list)
-- [ ] **Message** (role, content, meta flags)
-- [ ] **Template** (systemPrompt, JS logic, metadata)
-- [ ] **Snapshot** (git-linked)
-- [ ] **User / Session** (auth)
+- [x] **Project** (name, category, theme, status, activity flags)
+- [x] **RoadmapList** (title, tags, progress, JS logic ref)
+- [x] **ChatThread** (title, goal, templateId, status, progress)
+- [x] **MetaChat** (one per roadmap list)
+- [x] **Message** (role, content, meta flags)
+- [x] **Template** (systemPrompt, JS logic, metadata)
+- [x] **Snapshot** (git-linked)
+- [x] **User / Session** (auth)
 
 ---
 
@@ -50,45 +53,45 @@ Implement DB models + TypeScript interfaces:
 
 ### 3.1 Project Endpoints
 
-- [ ] GET /projects
-- [ ] POST /projects
-- [ ] PATCH /projects/:id
-- [ ] GET /projects/:id/details
+- [x] GET /projects
+- [x] POST /projects
+- [x] PATCH /projects/:id
+- [x] GET /projects/:id/details
 
 ### 3.2 Roadmap List Endpoints
 
-- [ ] GET /projects/:id/roadmaps
-- [ ] POST /projects/:id/roadmaps
-- [ ] PATCH /roadmaps/:id
-- [ ] GET /roadmaps/:id/meta-chat
+- [x] GET /projects/:id/roadmaps
+- [x] POST /projects/:id/roadmaps
+- [x] PATCH /roadmaps/:id
+- [x] GET /roadmaps/:id/meta-chat
 
 ### 3.3 Chat Endpoints
 
-- [ ] GET /roadmaps/:id/chats
-- [ ] POST /roadmaps/:id/chats (empty)
-- [ ] POST /roadmaps/:id/chats/from-template
-- [ ] PATCH /chats/:id
-- [ ] GET /chats/:id/messages
-- [ ] POST /chats/:id/messages
+- [x] GET /roadmaps/:id/chats
+- [x] POST /roadmaps/:id/chats (empty)
+- [x] POST /roadmaps/:id/chats/from-template
+- [x] PATCH /chats/:id
+- [x] GET /chats/:id/messages
+- [x] POST /chats/:id/messages
 
 ### 3.4 Templates
 
-- [ ] GET /templates
-- [ ] POST /templates
-- [ ] PATCH /templates/:id
+- [x] GET /templates
+- [x] POST /templates
+- [x] PATCH /templates/:id
 
 ### 3.5 Workspace File API
 
-- [ ] GET /fs/tree
-- [ ] GET /fs/file
-- [ ] POST /fs/write
-- [ ] GET /fs/diff
+- [x] GET /fs/tree
+- [x] GET /fs/file
+- [x] POST /fs/write
+- [x] GET /fs/diff
 
 ### 3.6 Terminal API
 
-- [ ] POST /terminal/sessions
-- [ ] WS /terminal/sessions/:id/stream
-- [ ] POST /terminal/sessions/:id/input
+- [x] POST /terminal/sessions
+- [x] WS /terminal/sessions/:id/stream
+- [x] POST /terminal/sessions/:id/input
 
 ### 3.7 Authentication & Security
 
