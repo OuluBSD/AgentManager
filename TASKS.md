@@ -21,7 +21,7 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 - [x] Install Node/TypeScript backend (Express/Nest/Fastify)
 - [x] Configure database layer (Prisma or Drizzle)
 - [x] Create `.env` templates for model providers
-- [ ] Establish Git repo with base project structure
+- [x] Establish Git repo with base project structure
 - [ ] Add Prettier, ESLint, lint-staged, Husky
 
 ---
