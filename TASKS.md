@@ -11,9 +11,11 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 - [x] Document audit `ipAddress` filter in API contracts
 - [x] Add Code tab toast for file-save errors (mirror success case)
 - [x] Quiet Code tab hook dependency lint warnings
-- [x] Run full backend/frontend test suites after recent changes (backend tests + frontend lint/build passing)
 - [x] Add Code tab toasts for file load/diff failures
 - [x] Remove Code tab hook dependency lint suppressions via stable callbacks
+- [x] Run full backend/frontend test suites after recent changes (backend tests + frontend lint/build passing)
+- [ ] Implement initial DB models for Project/RoadmapList/ChatThread/Message
+- [ ] Scaffold Projects API (list/create/update) to unblock UI wiring
 
 ---
 
