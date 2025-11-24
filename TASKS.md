@@ -105,8 +105,8 @@ Implement DB models + TypeScript interfaces:
 
 ## 4. Frontend – Global Infrastructure
 
-- [ ] Three-column layout (Projects | Roadmap Lists | Chats)
-- [ ] Main panel with tabs (Chat / Terminal / Code)
+- [x] Three-column layout (Projects | Roadmap Lists | Chats)
+- [x] Main panel with tabs (Chat / Terminal / Code)
 - [ ] Routing structure:
   - `/projects/:projectId`
   - `/projects/:projectId/roadmaps/:roadmapId`
@@ -140,10 +140,10 @@ Implement DB models + TypeScript interfaces:
 
 ## 7. Column 3 – Chats List
 
-- [ ] Chat items with title, subtle heuristic line, percent
-- [ ] Status colors
-- [ ] Click opens chat view in main panel
-- [ ] **Meta-chat appears at top**, visually separated
+- [x] Chat items with title, subtle heuristic line, percent
+- [x] Status colors
+- [x] Click opens chat view in main panel
+- [x] **Meta-chat appears at top**, visually separated
 - [ ] Right-click context menu (rename, open folder, merge)
 
 ---
@@ -152,7 +152,7 @@ Implement DB models + TypeScript interfaces:
 
 ### 8.1 Chat Header
 
-- [ ] Title
+- [x] Title
 - [ ] AI-generated status line from JSON logic
 - [ ] List of relevant roadmap tasks
 - [ ] Link to template
@@ -160,15 +160,15 @@ Implement DB models + TypeScript interfaces:
 
 ### 8.2 Message Stream
 
-- [ ] User/assistant/system/status/meta styling
-- [ ] Theming per message type
+- [x] User/assistant/system/status/meta styling
+- [x] Theming per message type
 - [ ] Filters: all/user/AI/status/meta
 - [ ] Previous/next user message navigation
 - [ ] Scroll anchoring & smooth streaming
 
 ### 8.3 Composer
 
-- [ ] Multiline input (Enter send, Shift+Enter newline)
+- [x] Multiline input (Enter send, Shift+Enter newline)
 - [ ] Slash commands + autocomplete
 - [ ] Future attach-from-server file dialog (scaffold only)
 
