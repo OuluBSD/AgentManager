@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   buildTerminalWsUrl,
   createTerminalSession,
@@ -188,10 +188,31 @@ export default function Page() {
   const [auditHasMore, setAuditHasMore] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
 
+  const roadmapStatusRef = useRef(roadmapStatus);
+  const auditFiltersRef = useRef(auditFilters);
+  const auditCursorRef = useRef(auditCursor);
+  const fsPathRef = useRef(fsPath);
+
+  useEffect(() => {
+    roadmapStatusRef.current = roadmapStatus;
+  }, [roadmapStatus]);
+
+  useEffect(() => {
+    auditFiltersRef.current = auditFilters;
+  }, [auditFilters]);
+
+  useEffect(() => {
+    auditCursorRef.current = auditCursor;
+  }, [auditCursor]);
+
+  useEffect(() => {
+    fsPathRef.current = fsPath;
+  }, [fsPath]);
+
   const eventTypeOptions = Array.from(new Set(auditEvents.map((e) => e.eventType))).sort();
 
-  const ensureStatus = async (roadmapId: string, token: string) => {
-    const existing = roadmapStatus[roadmapId];
+  const ensureStatus = useCallback(async (roadmapId: string, token: string) => {
+    const existing = roadmapStatusRef.current[roadmapId];
     if (existing) return existing;
     try {
       const remote = await fetchRoadmapStatus(token, roadmapId);
@@ -200,14 +221,15 @@ export default function Page() {
         progress: remote.progress ?? 0,
         summary: remote.summary,
       };
+      roadmapStatusRef.current = { ...roadmapStatusRef.current, [roadmapId]: mapped };
       setRoadmapStatus((prev) => ({ ...prev, [roadmapId]: mapped }));
       return mapped;
     } catch {
       return null;
     }
-  };
+  }, []);
 
-  const fallbackToMockData = (reason: string) => {
+  const fallbackToMockData = useCallback((reason: string) => {
     setStatusMessage(reason);
     setSessionToken(null);
     setActiveUser(null);
@@ -236,7 +258,7 @@ export default function Page() {
     setFsDiffLoading(false);
     setFsBaseSha("");
     setFsTargetSha("HEAD");
-  };
+  }, []);
 
   const updateTerminalStatusFromText = (text: string) => {
     if (!text) return;
@@ -251,132 +273,141 @@ export default function Page() {
     }
   };
 
-  const loadChatsForRoadmap = async (
-    roadmapId: string,
-    token: string,
-    statusHint?: { status: Status; progress: number; summary?: string }
-  ) => {
-    try {
-      const status = statusHint ?? (await ensureStatus(roadmapId, token));
-      const chatData = await fetchChats(token, roadmapId);
-      const mappedChats: ChatItem[] = [
-        status
-          ? {
-              id: `meta-${roadmapId}`,
-              title: "Meta-Chat",
-              status: status.status,
-              progress: status.progress,
-              note: status.summary ?? "Aggregated from child chats",
-              meta: true,
+  const loadChatsForRoadmap = useCallback(
+    async (
+      roadmapId: string,
+      token: string,
+      statusHint?: { status: Status; progress: number; summary?: string }
+    ) => {
+      try {
+        const status = statusHint ?? (await ensureStatus(roadmapId, token));
+        const chatData = await fetchChats(token, roadmapId);
+        const mappedChats: ChatItem[] = [
+          status
+            ? {
+                id: `meta-${roadmapId}`,
+                title: "Meta-Chat",
+                status: status.status,
+                progress: status.progress,
+                note: status.summary ?? "Aggregated from child chats",
+                meta: true,
+              }
+            : null,
+          ...chatData.map((c) => ({
+            id: c.id,
+            title: c.title,
+            status: (c.status as Status) ?? "active",
+            progress: c.progress ?? 0,
+            note: c.goal,
+          })),
+        ].filter(Boolean) as ChatItem[];
+        setChats(mappedChats);
+      } catch (err) {
+        setStatusMessage("Using mock chats (backend unreachable)");
+        setError(err instanceof Error ? err.message : "Failed to load chats");
+        setChats(mockChats);
+      }
+    },
+    [ensureStatus]
+  );
+
+  const loadRoadmapsForProject = useCallback(
+    async (projectId: string, token: string) => {
+      try {
+        const roadmapData = await fetchRoadmaps(token, projectId);
+        const storedRoadmapId =
+          typeof window !== "undefined" ? localStorage.getItem(ROADMAP_STORAGE_KEY) : null;
+        const statusPairs = await Promise.all(
+          roadmapData.map(async (r) => {
+            try {
+              const status = await fetchRoadmapStatus(token, r.id);
+              return [
+                r.id,
+                {
+                  status: (status.status as Status) ?? "active",
+                  progress: status.progress ?? 0,
+                  summary: status.summary,
+                },
+              ] as const;
+            } catch {
+              return [r.id, null] as const;
             }
-          : null,
-        ...chatData.map((c) => ({
-          id: c.id,
-          title: c.title,
-          status: (c.status as Status) ?? "active",
-          progress: c.progress ?? 0,
-          note: c.goal,
-        })),
-      ].filter(Boolean) as ChatItem[];
-      setChats(mappedChats);
-    } catch (err) {
-      setStatusMessage("Using mock chats (backend unreachable)");
-      setError(err instanceof Error ? err.message : "Failed to load chats");
-      setChats(mockChats);
-    }
-  };
-
-  const loadRoadmapsForProject = async (projectId: string, token: string) => {
-    try {
-      const roadmapData = await fetchRoadmaps(token, projectId);
-      const storedRoadmapId =
-        typeof window !== "undefined" ? localStorage.getItem(ROADMAP_STORAGE_KEY) : null;
-      const statusPairs = await Promise.all(
-        roadmapData.map(async (r) => {
-          try {
-            const status = await fetchRoadmapStatus(token, r.id);
-            return [
-              r.id,
-              {
-                status: (status.status as Status) ?? "active",
-                progress: status.progress ?? 0,
-                summary: status.summary,
-              },
-            ] as const;
-          } catch {
-            return [r.id, null] as const;
-          }
-        })
-      );
-      const statusMap = Object.fromEntries(
-        statusPairs.filter(([, value]) => value !== null) as [string, { status: Status; progress: number; summary?: string }][]
-      );
-      setRoadmapStatus((prev) => ({ ...prev, ...statusMap }));
-      const mappedRoadmaps = roadmapData.map((r) => ({
-        id: r.id,
-        title: r.title,
-        tags: r.tags ?? [],
-        status: (statusMap[r.id]?.status ?? (r.status as Status) ?? "active") as Status,
-        progress: statusMap[r.id]?.progress ?? r.progress ?? 0,
-        metaChatId: r.metaChatId,
-        summary: statusMap[r.id]?.summary,
-      }));
-      setRoadmaps(mappedRoadmaps);
-      const preferredRoadmapId =
-        storedRoadmapId && roadmapData.some((r) => r.id === storedRoadmapId)
-          ? storedRoadmapId
-          : roadmapData[0]?.id;
-      if (preferredRoadmapId) {
-        setSelectedRoadmapId(preferredRoadmapId);
-        if (typeof window !== "undefined") localStorage.setItem(ROADMAP_STORAGE_KEY, preferredRoadmapId);
-        await loadChatsForRoadmap(preferredRoadmapId, token, statusMap[preferredRoadmapId]);
-      } else {
-        setChats([]);
+          })
+        );
+        const statusMap = Object.fromEntries(
+          statusPairs.filter(([, value]) => value !== null) as [string, { status: Status; progress: number; summary?: string }][]
+        );
+        setRoadmapStatus((prev) => ({ ...prev, ...statusMap }));
+        const mappedRoadmaps = roadmapData.map((r) => ({
+          id: r.id,
+          title: r.title,
+          tags: r.tags ?? [],
+          status: (statusMap[r.id]?.status ?? (r.status as Status) ?? "active") as Status,
+          progress: statusMap[r.id]?.progress ?? r.progress ?? 0,
+          metaChatId: r.metaChatId,
+          summary: statusMap[r.id]?.summary,
+        }));
+        setRoadmaps(mappedRoadmaps);
+        const preferredRoadmapId =
+          storedRoadmapId && roadmapData.some((r) => r.id === storedRoadmapId)
+            ? storedRoadmapId
+            : roadmapData[0]?.id;
+        if (preferredRoadmapId) {
+          setSelectedRoadmapId(preferredRoadmapId);
+          if (typeof window !== "undefined") localStorage.setItem(ROADMAP_STORAGE_KEY, preferredRoadmapId);
+          await loadChatsForRoadmap(preferredRoadmapId, token, statusMap[preferredRoadmapId]);
+        } else {
+          setChats([]);
+          setSelectedRoadmapId(null);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load roadmaps");
+        setStatusMessage("Failed to load roadmaps; showing mock data.");
+        setRoadmaps(mockRoadmaps);
+        setChats(mockChats);
         setSelectedRoadmapId(null);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load roadmaps");
-      setStatusMessage("Failed to load roadmaps; showing mock data.");
-      setRoadmaps(mockRoadmaps);
-      setChats(mockChats);
-      setSelectedRoadmapId(null);
-    }
-  };
+    },
+    [loadChatsForRoadmap]
+  );
 
-  const hydrateWorkspace = async (token: string, activeUsername: string) => {
-    try {
-      setSessionToken(token);
-      setActiveUser(activeUsername);
-      const projectData = await fetchProjects(token);
-      const storedProjectId =
-        typeof window !== "undefined" ? localStorage.getItem(PROJECT_STORAGE_KEY) : null;
-      const mappedProjects = projectData.map((p) => ({
-        id: p.id,
-        name: p.name,
-        category: p.category ?? "Uncategorized",
-        status: (p.status as Status) ?? "active",
-        info: p.description ?? "",
-      }));
-      setProjects(mappedProjects);
-      const preferredProjectId =
-        storedProjectId && projectData.some((p) => p.id === storedProjectId)
-          ? storedProjectId
-          : projectData[0]?.id;
-      if (preferredProjectId) {
-        setSelectedProjectId(preferredProjectId);
-        if (typeof window !== "undefined") localStorage.setItem(PROJECT_STORAGE_KEY, preferredProjectId);
-        await loadRoadmapsForProject(preferredProjectId, token);
-      } else {
-        setRoadmaps([]);
-        setChats([]);
-        setSelectedProjectId(null);
-        setSelectedRoadmapId(null);
+  const hydrateWorkspace = useCallback(
+    async (token: string, activeUsername: string) => {
+      try {
+        setSessionToken(token);
+        setActiveUser(activeUsername);
+        const projectData = await fetchProjects(token);
+        const storedProjectId =
+          typeof window !== "undefined" ? localStorage.getItem(PROJECT_STORAGE_KEY) : null;
+        const mappedProjects = projectData.map((p) => ({
+          id: p.id,
+          name: p.name,
+          category: p.category ?? "Uncategorized",
+          status: (p.status as Status) ?? "active",
+          info: p.description ?? "",
+        }));
+        setProjects(mappedProjects);
+        const preferredProjectId =
+          storedProjectId && projectData.some((p) => p.id === storedProjectId)
+            ? storedProjectId
+            : projectData[0]?.id;
+        if (preferredProjectId) {
+          setSelectedProjectId(preferredProjectId);
+          if (typeof window !== "undefined") localStorage.setItem(PROJECT_STORAGE_KEY, preferredProjectId);
+          await loadRoadmapsForProject(preferredProjectId, token);
+        } else {
+          setRoadmaps([]);
+          setChats([]);
+          setSelectedProjectId(null);
+          setSelectedRoadmapId(null);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load projects");
+        fallbackToMockData("Backend unreachable; showing mock data.");
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load projects");
-      fallbackToMockData("Backend unreachable; showing mock data.");
-    }
-  };
+    },
+    [fallbackToMockData, loadRoadmapsForProject]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -399,8 +430,7 @@ export default function Page() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once on mount; downstream loaders handle updates
-  }, []);
+  }, [fallbackToMockData, hydrateWorkspace]);
 
   const handleSelectRoadmap = async (roadmapId: string) => {
     setSelectedRoadmapId(roadmapId);
@@ -544,65 +574,71 @@ export default function Page() {
     setTerminalInput("");
   };
 
-  const loadFsTree = async (pathOverride?: string) => {
-    if (!sessionToken || !selectedProjectId) {
-      setFsError("Login and select a project to browse files.");
-      return;
-    }
-    const targetPath = pathOverride ?? fsPath ?? ".";
-    setFsLoading(true);
-    setFsError(null);
-    setFsDiff("");
-    setFsDiffError(null);
-    setFsDiffLoaded(false);
-    setFsDiffLoading(false);
-    setFsContent("");
-    setFsContentPath(null);
-    setFsDraft("");
-    setFsSaving(false);
-    setFsSaveStatus(null);
-    try {
-      const tree = await fetchFileTree(sessionToken, selectedProjectId, targetPath);
-      setFsEntries(tree.entries);
-      setFsPath(tree.path || targetPath || ".");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load tree";
-      setFsError(message);
-      setFsEntries([]);
-      setFsToast({ message: "File list failed", detail: `${targetPath}: ${message}`, tone: "error" });
-    } finally {
-      setFsLoading(false);
-    }
-  };
-
-  const openFile = async (path: string) => {
-    if (!sessionToken || !selectedProjectId) {
-      setFsError("Login and select a project to open files.");
-      return;
-    }
-    setFsLoading(true);
-    setFsError(null);
-    setFsDiff("");
-    setFsDiffError(null);
-    setFsDiffLoaded(false);
-    setFsDiffLoading(false);
-    try {
-      const file = await fetchFileContent(sessionToken, selectedProjectId, path);
-      setFsContentPath(file.path);
-      setFsContent(file.content);
-      setFsDraft(file.content);
-      setFsSaveStatus(null);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load file";
-      setFsError(message);
+  const loadFsTree = useCallback(
+    async (pathOverride?: string) => {
+      if (!sessionToken || !selectedProjectId) {
+        setFsError("Login and select a project to browse files.");
+        return;
+      }
+      const targetPath = pathOverride ?? fsPathRef.current ?? ".";
+      setFsLoading(true);
+      setFsError(null);
+      setFsDiff("");
+      setFsDiffError(null);
+      setFsDiffLoaded(false);
+      setFsDiffLoading(false);
       setFsContent("");
       setFsContentPath(null);
       setFsDraft("");
-      setFsToast({ message: "Open failed", detail: `${path}: ${message}`, tone: "error" });
-    } finally {
-      setFsLoading(false);
-    }
-  };
+      setFsSaving(false);
+      setFsSaveStatus(null);
+      try {
+        const tree = await fetchFileTree(sessionToken, selectedProjectId, targetPath);
+        setFsEntries(tree.entries);
+        setFsPath(tree.path || targetPath || ".");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to load tree";
+        setFsError(message);
+        setFsEntries([]);
+        setFsToast({ message: "File list failed", detail: `${targetPath}: ${message}`, tone: "error" });
+      } finally {
+        setFsLoading(false);
+      }
+    },
+    [sessionToken, selectedProjectId]
+  );
+
+  const openFile = useCallback(
+    async (path: string) => {
+      if (!sessionToken || !selectedProjectId) {
+        setFsError("Login and select a project to open files.");
+        return;
+      }
+      setFsLoading(true);
+      setFsError(null);
+      setFsDiff("");
+      setFsDiffError(null);
+      setFsDiffLoaded(false);
+      setFsDiffLoading(false);
+      try {
+        const file = await fetchFileContent(sessionToken, selectedProjectId, path);
+        setFsContentPath(file.path);
+        setFsContent(file.content);
+        setFsDraft(file.content);
+        setFsSaveStatus(null);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to load file";
+        setFsError(message);
+        setFsContent("");
+        setFsContentPath(null);
+        setFsDraft("");
+        setFsToast({ message: "Open failed", detail: `${path}: ${message}`, tone: "error" });
+      } finally {
+        setFsLoading(false);
+      }
+    },
+    [sessionToken, selectedProjectId]
+  );
 
   const handleSelectEntry = (entry: { type: "dir" | "file"; name: string }) => {
     const base = fsPath === "." ? "" : fsPath;
@@ -625,7 +661,7 @@ export default function Page() {
     loadFsTree(parent);
   };
 
-  const loadFsDiff = async () => {
+  const loadFsDiff = useCallback(async () => {
     if (!sessionToken || !selectedProjectId || !fsContentPath) {
       setFsDiffError("Open a file to view git diff (login required).");
       return;
@@ -653,7 +689,7 @@ export default function Page() {
     } finally {
       setFsDiffLoading(false);
     }
-  };
+  }, [fsBaseSha, fsContentPath, fsTargetSha, selectedProjectId, sessionToken]);
 
   const saveFile = async () => {
     if (!sessionToken || !selectedProjectId || !fsContentPath) {
@@ -715,8 +751,7 @@ export default function Page() {
     if (sessionToken && selectedProjectId) {
       loadFsTree(".");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keep mount-time handler stable; loadFsTree depends on mutable path
-  }, [sessionToken, selectedProjectId]);
+  }, [loadFsTree, selectedProjectId, sessionToken]);
 
   useEffect(() => {
     if (!fsToast) return;
@@ -724,49 +759,53 @@ export default function Page() {
     return () => clearTimeout(timer);
   }, [fsToast]);
 
-  const loadAuditLog = async (
-    projectId?: string,
-    options?: { reset?: boolean; filtersOverride?: Partial<typeof auditFilters> }
-  ) => {
-    if (!sessionToken) return;
-    const cursor = options?.reset ? undefined : auditCursor ?? undefined;
-    const filters = {
-      eventType: (options?.filtersOverride?.eventType ?? auditFilters.eventType) || undefined,
-      userId: (options?.filtersOverride?.userId ?? auditFilters.userId) || undefined,
-      pathContains: (options?.filtersOverride?.pathContains ?? auditFilters.pathContains) || undefined,
-      ipAddress: (options?.filtersOverride?.ipAddress ?? auditFilters.ipAddress) || undefined,
-    };
-    if (options?.reset) {
-      setAuditEvents([]);
-      setAuditCursor(null);
-      setAuditHasMore(false);
-    }
-    setAuditLoading(true);
-    try {
-      const { events, paging } = await fetchAuditEvents(
-        sessionToken,
-        projectId,
-        50,
-        undefined,
-        cursor,
-        filters,
-        auditSort
-      );
-      setAuditEvents((prev) => (options?.reset ? events : [...prev, ...events]));
-      setAuditCursor(paging?.nextCursor ?? null);
-      setAuditHasMore(Boolean(paging?.hasMore));
-      setAuditError(null);
-    } catch (err) {
+  const loadAuditLog = useCallback(
+    async (
+      projectId?: string,
+      options?: { reset?: boolean; filtersOverride?: Partial<typeof auditFilters> }
+    ) => {
+      if (!sessionToken) return;
+      const cursor = options?.reset ? undefined : auditCursorRef.current ?? undefined;
+      const baseFilters = auditFiltersRef.current;
+      const filters = {
+        eventType: (options?.filtersOverride?.eventType ?? baseFilters.eventType) || undefined,
+        userId: (options?.filtersOverride?.userId ?? baseFilters.userId) || undefined,
+        pathContains: (options?.filtersOverride?.pathContains ?? baseFilters.pathContains) || undefined,
+        ipAddress: (options?.filtersOverride?.ipAddress ?? baseFilters.ipAddress) || undefined,
+      };
       if (options?.reset) {
         setAuditEvents([]);
         setAuditCursor(null);
+        setAuditHasMore(false);
       }
-      setAuditHasMore(false);
-      setAuditError(err instanceof Error ? err.message : "Failed to load audit events");
-    } finally {
-      setAuditLoading(false);
-    }
-  };
+      setAuditLoading(true);
+      try {
+        const { events, paging } = await fetchAuditEvents(
+          sessionToken,
+          projectId,
+          50,
+          undefined,
+          cursor,
+          filters,
+          auditSort
+        );
+        setAuditEvents((prev) => (options?.reset ? events : [...prev, ...events]));
+        setAuditCursor(paging?.nextCursor ?? null);
+        setAuditHasMore(Boolean(paging?.hasMore));
+        setAuditError(null);
+      } catch (err) {
+        if (options?.reset) {
+          setAuditEvents([]);
+          setAuditCursor(null);
+        }
+        setAuditHasMore(false);
+        setAuditError(err instanceof Error ? err.message : "Failed to load audit events");
+      } finally {
+        setAuditLoading(false);
+      }
+    },
+    [auditSort, sessionToken]
+  );
 
   useEffect(() => {
     if (sessionToken) {
@@ -776,8 +815,7 @@ export default function Page() {
       setAuditCursor(null);
       setAuditHasMore(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadAuditLog captures cursor + filters; avoid resetting on internal updates
-  }, [sessionToken, selectedProjectId, auditProjectId, auditSort]);
+  }, [auditProjectId, loadAuditLog, selectedProjectId, sessionToken]);
 
   useEffect(() => {
     if (selectedProjectId && !auditProjectId) {
