@@ -188,6 +188,19 @@ body {
   color: #e0f2fe;
 }
 
+.code-input {
+  width: 100%;
+  min-height: 260px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  resize: vertical;
+  white-space: pre;
+}
+
 @media (max-width: 1200px) {
   .columns {
     grid-template-columns: repeat(2, 1fr);

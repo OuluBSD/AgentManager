@@ -90,6 +90,27 @@ export async function fetchFileDiff(
   return fetchWithAuth(token, `/api/fs/diff?${params.toString()}`);
 }
 
+export async function writeFileContent(
+  token: string,
+  projectId: string,
+  path: string,
+  content: string,
+  baseSha?: string | null
+): Promise<{ success: boolean; path: string; baseSha: string | null }> {
+  const res = await fetch(`${API_BASE}/api/fs/write`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ projectId, path, content, baseSha }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to write file (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function createTerminalSession(
   token: string,
   projectId?: string,

@@ -11,6 +11,7 @@ import {
   fetchRoadmapStatus,
   fetchRoadmaps,
   fetchFileDiff,
+  writeFileContent,
   login,
   fetchAuditEvents,
   sendTerminalInput,
@@ -143,8 +144,11 @@ export default function Page() {
   const [fsEntries, setFsEntries] = useState<{ type: "dir" | "file"; name: string }[]>([]);
   const [fsContentPath, setFsContentPath] = useState<string | null>(null);
   const [fsContent, setFsContent] = useState<string>("");
+  const [fsDraft, setFsDraft] = useState<string>("");
   const [fsLoading, setFsLoading] = useState(false);
+  const [fsSaving, setFsSaving] = useState(false);
   const [fsError, setFsError] = useState<string | null>(null);
+  const [fsSaveStatus, setFsSaveStatus] = useState<string | null>(null);
   const [fsDiff, setFsDiff] = useState<string>("");
   const [fsDiffError, setFsDiffError] = useState<string | null>(null);
   const [fsDiffLoading, setFsDiffLoading] = useState(false);
@@ -202,6 +206,9 @@ export default function Page() {
     setFsContent("");
     setFsContentPath(null);
     setFsPath(".");
+    setFsDraft("");
+    setFsSaving(false);
+    setFsSaveStatus(null);
     setFsDiff("");
     setFsDiffError(null);
     setFsDiffLoaded(false);
@@ -484,6 +491,9 @@ export default function Page() {
     setFsDiffLoading(false);
     setFsContent("");
     setFsContentPath(null);
+    setFsDraft("");
+    setFsSaving(false);
+    setFsSaveStatus(null);
     try {
       const tree = await fetchFileTree(sessionToken, selectedProjectId, targetPath);
       setFsEntries(tree.entries);
@@ -511,10 +521,13 @@ export default function Page() {
       const file = await fetchFileContent(sessionToken, selectedProjectId, path);
       setFsContentPath(file.path);
       setFsContent(file.content);
+      setFsDraft(file.content);
+      setFsSaveStatus(null);
     } catch (err) {
       setFsError(err instanceof Error ? err.message : "Failed to load file");
       setFsContent("");
       setFsContentPath(null);
+      setFsDraft("");
     } finally {
       setFsLoading(false);
     }
@@ -569,6 +582,31 @@ export default function Page() {
     }
   };
 
+  const saveFile = async () => {
+    if (!sessionToken || !selectedProjectId || !fsContentPath) {
+      setFsError("Login and open a file before saving.");
+      return;
+    }
+    setFsSaving(true);
+    setFsSaveStatus(null);
+    setFsError(null);
+    try {
+      await writeFileContent(
+        sessionToken,
+        selectedProjectId,
+        fsContentPath,
+        fsDraft,
+        fsBaseSha.trim() || undefined
+      );
+      setFsContent(fsDraft);
+      setFsSaveStatus("Saved");
+    } catch (err) {
+      setFsError(err instanceof Error ? err.message : "Failed to save file");
+    } finally {
+      setFsSaving(false);
+    }
+  };
+
   useEffect(() => {
     return () => {
       if (terminalSocket.current) {
@@ -582,6 +620,9 @@ export default function Page() {
     setFsContent("");
     setFsContentPath(null);
     setFsPath(".");
+    setFsDraft("");
+    setFsSaving(false);
+    setFsSaveStatus(null);
     setFsDiff("");
     setFsDiffError(null);
     setFsDiffLoaded(false);
@@ -725,11 +766,41 @@ export default function Page() {
             </div>
             {fsContentPath && (
               <>
-                <div className="panel-mono" style={{ maxHeight: 320, overflow: "auto", whiteSpace: "pre" }}>
-                  <div className="item-subtle" style={{ marginBottom: 6 }}>
-                    {fsContentPath}
-                  </div>
-                  {fsContent}
+                <div className="item-subtle" style={{ marginBottom: 6 }}>
+                  {fsContentPath} {fsDraft !== fsContent ? "(unsaved)" : null} {fsSaveStatus}
+                </div>
+                <textarea
+                  className="code-input"
+                  value={fsDraft}
+                  onChange={(e) => {
+                    setFsDraft(e.target.value);
+                    setFsSaveStatus(null);
+                  }}
+                  rows={14}
+                  disabled={fsLoading}
+                />
+                <div className="login-row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                  <button
+                    className="ghost"
+                    onClick={() => setFsDraft(fsContent)}
+                    disabled={fsDraft === fsContent || fsSaving || fsLoading}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    className="tab"
+                    onClick={saveFile}
+                    disabled={
+                      fsDraft === fsContent ||
+                      fsSaving ||
+                      fsLoading ||
+                      !sessionToken ||
+                      !selectedProjectId
+                    }
+                  >
+                    {fsSaving ? "Saving…" : "Save"}
+                  </button>
+                  {fsSaveStatus && <span className="item-subtle">{fsSaveStatus}</span>}
                 </div>
                 <div className="login-row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                   <input
