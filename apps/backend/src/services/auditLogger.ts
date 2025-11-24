@@ -8,6 +8,7 @@ type AuditPayload = {
   eventType: string;
   path?: string | null;
   sessionId?: string | null;
+  ipAddress?: string | null;
   metadata?: Record<string, unknown> | null;
 };
 
@@ -27,6 +28,7 @@ export async function recordAuditEvent(
       eventType: payload.eventType,
       path: payload.path ?? null,
       sessionId: payload.sessionId ?? null,
+      ipAddress: payload.ipAddress ?? null,
       metadata: payload.metadata ?? null,
     });
   } catch (err) {

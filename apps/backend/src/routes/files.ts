@@ -47,6 +47,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
         projectId: query.projectId,
         eventType: "fs:tree",
         path: inputPath,
+        ipAddress: request.ip,
         metadata: { entryCount: payload.length, ip: request.ip },
       });
       reply.send({ path: inputPath, entries: payload });
@@ -89,6 +90,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
         projectId: query.projectId,
         eventType: "fs:read",
         path: query.path,
+        ipAddress: request.ip,
         metadata: {
           bytes: Buffer.byteLength(content, "utf8"),
           preview,
@@ -137,6 +139,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
         projectId: body.projectId,
         eventType: "fs:write",
         path: body.path,
+        ipAddress: request.ip,
         metadata: {
           baseSha: body.baseSha ?? null,
           bytes: Buffer.byteLength(body.content, "utf8"),
@@ -198,6 +201,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
         projectId: query.projectId,
         eventType: "fs:diff",
         path: query.path,
+        ipAddress: request.ip,
         metadata: {
           baseSha: baseSha ?? null,
           targetSha,

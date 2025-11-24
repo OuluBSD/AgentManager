@@ -95,8 +95,10 @@ test("terminal routes persist audit events when db is configured", async () => {
     assert.ok(startRow, "start event inserted");
     assert.ok(inputRow, "input event inserted");
     assert.equal(startRow!.sessionId, terminalSessionId);
+    assert.equal(startRow!.ipAddress, ip);
     assert.equal((startRow!.metadata as any)?.ip, ip);
     assert.equal((inputRow!.metadata as any)?.bytes, Buffer.byteLength(input, "utf8"));
+    assert.equal(inputRow!.ipAddress, ip);
     assert.equal((inputRow!.metadata as any)?.ip, ip);
   } finally {
     if (terminalSessionId) {
@@ -158,8 +160,10 @@ test("file routes persist audit events when db is configured", async () => {
     assert.ok(readRow, "read audit inserted");
     assert.equal(writeRow!.projectId, project.id);
     assert.equal(writeRow!.path, filePath);
+    assert.equal(writeRow!.ipAddress, ip);
     assert.equal((writeRow!.metadata as any)?.ip, ip);
     assert.equal((readRow!.metadata as any)?.preview, content.slice(0, 200));
+    assert.equal(readRow!.ipAddress, ip);
     assert.equal((readRow!.metadata as any)?.ip, ip);
   } finally {
     await app.close();

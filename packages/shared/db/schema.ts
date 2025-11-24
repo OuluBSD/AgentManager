@@ -128,12 +128,14 @@ export const auditEvents = pgTable(
     eventType: varchar("event_type", { length: 64 }).notNull(),
     path: text("path"),
     sessionId: varchar("session_id", { length: 255 }),
+    ipAddress: varchar("ip_address", { length: 64 }),
     metadata: jsonb("metadata"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
     auditProjectIdIdx: index("audit_events_project_id_idx").on(table.projectId),
     auditEventTypeIdx: index("audit_events_event_type_idx").on(table.eventType),
+    auditIpIdx: index("audit_events_ip_idx").on(table.ipAddress),
     auditCreatedAtIdx: index("audit_events_created_at_idx").on(table.createdAt),
   })
 );

@@ -43,6 +43,7 @@ type AuditEvent = {
   sessionId?: string | null;
   userId?: string | null;
   projectId?: string | null;
+  ipAddress?: string | null;
   metadata?: Record<string, unknown> | null;
 };
 
@@ -1153,9 +1154,19 @@ export default function Page() {
                 </span>
               </div>
               <div className="item-sub">{event.path ?? event.sessionId ?? "N/A"}</div>
-              <div className="item-subtle">
-                user {event.userId ?? "—"} · session {event.sessionId ?? "—"} · project {event.projectId ?? "—"}
-              </div>
+              {(() => {
+                const derivedIp =
+                  event.ipAddress ??
+                  (event.metadata && typeof (event.metadata as Record<string, unknown>).ip === "string"
+                    ? String((event.metadata as Record<string, unknown>).ip)
+                    : null);
+                return (
+                  <div className="item-subtle">
+                    user {event.userId ?? "—"} · session {event.sessionId ?? "—"} · project {event.projectId ?? "—"} · ip{" "}
+                    {derivedIp ?? "—"}
+                  </div>
+                );
+              })()}
               {(() => {
                 const metaSummary = summarizeAuditMeta(event.metadata);
                 return metaSummary ? <div className="item-subtle">meta {metaSummary}</div> : null;

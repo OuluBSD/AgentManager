@@ -36,6 +36,7 @@ export const auditRoutes: FastifyPluginAsync = async (fastify) => {
         userId: schema.auditEvents.userId,
         path: schema.auditEvents.path,
         sessionId: schema.auditEvents.sessionId,
+        ipAddress: schema.auditEvents.ipAddress,
         metadata: schema.auditEvents.metadata,
         createdAt: schema.auditEvents.createdAt,
       })

@@ -172,6 +172,7 @@ export async function fetchAuditEvents(
     sessionId?: string | null;
     userId?: string | null;
     projectId?: string | null;
+    ipAddress?: string | null;
     metadata?: Record<string, unknown> | null;
   }[];
   paging?: { hasMore: boolean; nextCursor?: string };

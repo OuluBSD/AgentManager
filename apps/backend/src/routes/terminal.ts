@@ -34,6 +34,7 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       projectId: body?.projectId ?? null,
       eventType: "terminal:start",
       sessionId: terminal.id,
+      ipAddress: request.ip,
       metadata: body?.cwd ? { cwd: body.cwd, ip: request.ip } : { ip: request.ip },
     });
     reply.code(201).send({ sessionId: terminal.id });
@@ -107,6 +108,7 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
           projectId: managed.projectId ?? null,
           eventType: "terminal:exit",
           sessionId: managed.id,
+          ipAddress: request.ip,
           metadata: {
             code: code ?? 0,
             signal: signal ?? null,
@@ -177,6 +179,7 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       eventType: "terminal:input",
       projectId: getTerminalSession(params.sessionId)?.projectId,
       sessionId: params.sessionId,
+      ipAddress: request.ip,
       metadata: {
         preview,
         length,
