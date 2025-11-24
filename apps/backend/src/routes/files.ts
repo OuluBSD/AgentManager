@@ -47,6 +47,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
         projectId: query.projectId,
         eventType: "fs:tree",
         path: inputPath,
+        metadata: { entryCount: payload.length },
       });
       reply.send({ path: inputPath, entries: payload });
     } catch (err) {
@@ -82,11 +83,17 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const content = await fs.readFile(safePath.absolutePath, "utf8");
+      const preview = content.slice(0, 200);
       await recordAuditEvent(fastify, {
         userId: session.userId,
         projectId: query.projectId,
         eventType: "fs:read",
         path: query.path,
+        metadata: {
+          bytes: Buffer.byteLength(content, "utf8"),
+          preview,
+          truncated: content.length > preview.length,
+        },
       });
       reply.send({ path: query.path, content });
     } catch (err) {
@@ -123,12 +130,18 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       await fs.mkdir(path.dirname(safePath.absolutePath), { recursive: true });
       await fs.writeFile(safePath.absolutePath, body.content, "utf8");
+      const preview = body.content.slice(0, 200);
       await recordAuditEvent(fastify, {
         userId: session.userId,
         projectId: body.projectId,
         eventType: "fs:write",
         path: body.path,
-        metadata: body.baseSha ? { baseSha: body.baseSha } : null,
+        metadata: {
+          baseSha: body.baseSha ?? null,
+          bytes: Buffer.byteLength(body.content, "utf8"),
+          preview,
+          truncated: body.content.length > preview.length,
+        },
       });
       reply.send({ success: true, path: body.path, baseSha: body?.baseSha ?? null });
     } catch (err) {
@@ -183,7 +196,11 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
         projectId: query.projectId,
         eventType: "fs:diff",
         path: query.path,
-        metadata: { baseSha: baseSha ?? null, targetSha },
+        metadata: {
+          baseSha: baseSha ?? null,
+          targetSha,
+          diffBytes: Buffer.byteLength(result.stdout ?? "", "utf8"),
+        },
       });
       reply.send({ path: query.path, diff: result.stdout ?? "" });
     } catch (err) {

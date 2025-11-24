@@ -93,12 +93,19 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       reply.code(404).send({ error: { code: "not_found", message: "Session not found" } });
       return;
     }
+    const preview = body.data.slice(0, 120);
+    const length = body.data.length;
     await recordAuditEvent(fastify, {
       userId: session.userId,
       eventType: "terminal:input",
       projectId: getTerminalSession(params.sessionId)?.projectId,
       sessionId: params.sessionId,
-      metadata: { preview: body.data.slice(0, 120) },
+      metadata: {
+        preview,
+        length,
+        bytes: Buffer.byteLength(body.data, "utf8"),
+        truncated: length > preview.length,
+      },
     });
     reply.send({ accepted: true });
   });

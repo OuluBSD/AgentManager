@@ -78,6 +78,42 @@ function progressPercent(value: number) {
   return Math.max(0, Math.min(Math.round((value ?? 0) * 100), 100));
 }
 
+function summarizeAuditMeta(meta?: Record<string, unknown> | null) {
+  if (!meta) return null;
+  const data = meta as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof data.preview === "string" && data.preview.length) {
+    const withEllipsis = data.truncated ? `${data.preview}…` : data.preview;
+    parts.push(`“${withEllipsis}”`);
+  }
+  if (typeof data.cwd === "string" && data.cwd.length) {
+    parts.push(`cwd ${data.cwd}`);
+  }
+  if (typeof data.entryCount === "number") {
+    parts.push(`${data.entryCount} entries`);
+  }
+  if (typeof data.bytes === "number") {
+    parts.push(`${data.bytes} bytes`);
+  }
+  if (typeof data.length === "number" && data.length !== data.bytes) {
+    parts.push(`${data.length} chars`);
+  }
+  if (typeof data.diffBytes === "number") {
+    parts.push(`diff ${data.diffBytes} bytes`);
+  }
+  if ("baseSha" in data && (typeof data.baseSha === "string" || data.baseSha === null)) {
+    parts.push(`base ${data.baseSha ?? "—"}`);
+  }
+  if (typeof data.targetSha === "string") {
+    parts.push(`target ${data.targetSha}`);
+  }
+  if (!parts.length) {
+    const fallback = JSON.stringify(meta);
+    return fallback.slice(0, 160) + (fallback.length > 160 ? "…" : "");
+  }
+  return parts.join(" · ");
+}
+
 export default function Page() {
   const [projects, setProjects] = useState<ProjectItem[]>(mockProjects);
   const [roadmaps, setRoadmaps] = useState<RoadmapItem[]>(mockRoadmaps);
@@ -879,14 +915,9 @@ export default function Page() {
               <div className="item-subtle">
                 user {event.userId ?? "—"} · session {event.sessionId ?? "—"} · project {event.projectId ?? "—"}
               </div>
-              {event.metadata && (() => {
-                const metaText = JSON.stringify(event.metadata);
-                return (
-                  <div className="item-subtle">
-                    meta {metaText.slice(0, 160)}
-                    {metaText.length > 160 ? "…" : ""}
-                  </div>
-                );
+              {(() => {
+                const metaSummary = summarizeAuditMeta(event.metadata);
+                return metaSummary ? <div className="item-subtle">meta {metaSummary}</div> : null;
               })()}
             </div>
           ))}
