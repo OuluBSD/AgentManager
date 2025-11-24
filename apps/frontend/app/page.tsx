@@ -7,6 +7,8 @@ type Status = "inactive" | "waiting" | "active" | "blocked" | "done" | "in_progr
 const DEMO_USERNAME = process.env.NEXT_PUBLIC_DEMO_USERNAME ?? "demo";
 const DEMO_PASSWORD = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "demo";
 const DEMO_KEYFILE = process.env.NEXT_PUBLIC_DEMO_KEYFILE_TOKEN;
+const PROJECT_STORAGE_KEY = "agentmgr:selectedProject";
+const ROADMAP_STORAGE_KEY = "agentmgr:selectedRoadmap";
 
 type ProjectItem = { id?: string; name: string; category: string; status: Status; info: string };
 type RoadmapItem = {
@@ -71,6 +73,7 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"Chat" | "Terminal" | "Code">("Chat");
 
   const ensureStatus = async (roadmapId: string, token: string) => {
@@ -87,6 +90,21 @@ export default function Page() {
       return mapped;
     } catch {
       return null;
+    }
+  };
+
+  const fallbackToMockData = (reason: string) => {
+    setStatusMessage(reason);
+    setSessionToken(null);
+    setActiveUser(null);
+    setProjects(mockProjects);
+    setRoadmaps(mockRoadmaps);
+    setChats(mockChats);
+    setSelectedProjectId(null);
+    setSelectedRoadmapId(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(PROJECT_STORAGE_KEY);
+      localStorage.removeItem(ROADMAP_STORAGE_KEY);
     }
   };
 
@@ -118,76 +136,102 @@ export default function Page() {
         })),
       ].filter(Boolean) as ChatItem[];
       setChats(mappedChats);
-    } catch {
-      setError("Using mock chats (backend unreachable)");
+    } catch (err) {
+      setStatusMessage("Using mock chats (backend unreachable)");
+      setError(err instanceof Error ? err.message : "Failed to load chats");
       setChats(mockChats);
     }
   };
 
   const loadRoadmapsForProject = async (projectId: string, token: string) => {
-    const roadmapData = await fetchRoadmaps(token, projectId);
-    const statusPairs = await Promise.all(
-      roadmapData.map(async (r) => {
-        try {
-          const status = await fetchRoadmapStatus(token, r.id);
-          return [
-            r.id,
-            {
-              status: (status.status as Status) ?? "active",
-              progress: status.progress ?? 0,
-              summary: status.summary,
-            },
-          ] as const;
-        } catch {
-          return [r.id, null] as const;
-        }
-      })
-    );
-    const statusMap = Object.fromEntries(
-      statusPairs.filter(([, value]) => value !== null) as [string, { status: Status; progress: number; summary?: string }][]
-    );
-    setRoadmapStatus((prev) => ({ ...prev, ...statusMap }));
-    const mappedRoadmaps = roadmapData.map((r) => ({
-      id: r.id,
-      title: r.title,
-      tags: r.tags ?? [],
-      status: (statusMap[r.id]?.status ?? (r.status as Status) ?? "active") as Status,
-      progress: statusMap[r.id]?.progress ?? r.progress ?? 0,
-      metaChatId: r.metaChatId,
-      summary: statusMap[r.id]?.summary,
-    }));
-    setRoadmaps(mappedRoadmaps);
-    const firstRoadmapId = roadmapData[0]?.id;
-    if (firstRoadmapId) {
-      setSelectedRoadmapId(firstRoadmapId);
-      await loadChatsForRoadmap(firstRoadmapId, token, statusMap[firstRoadmapId]);
-    } else {
-      setChats([]);
+    try {
+      const roadmapData = await fetchRoadmaps(token, projectId);
+      const storedRoadmapId =
+        typeof window !== "undefined" ? localStorage.getItem(ROADMAP_STORAGE_KEY) : null;
+      const statusPairs = await Promise.all(
+        roadmapData.map(async (r) => {
+          try {
+            const status = await fetchRoadmapStatus(token, r.id);
+            return [
+              r.id,
+              {
+                status: (status.status as Status) ?? "active",
+                progress: status.progress ?? 0,
+                summary: status.summary,
+              },
+            ] as const;
+          } catch {
+            return [r.id, null] as const;
+          }
+        })
+      );
+      const statusMap = Object.fromEntries(
+        statusPairs.filter(([, value]) => value !== null) as [string, { status: Status; progress: number; summary?: string }][]
+      );
+      setRoadmapStatus((prev) => ({ ...prev, ...statusMap }));
+      const mappedRoadmaps = roadmapData.map((r) => ({
+        id: r.id,
+        title: r.title,
+        tags: r.tags ?? [],
+        status: (statusMap[r.id]?.status ?? (r.status as Status) ?? "active") as Status,
+        progress: statusMap[r.id]?.progress ?? r.progress ?? 0,
+        metaChatId: r.metaChatId,
+        summary: statusMap[r.id]?.summary,
+      }));
+      setRoadmaps(mappedRoadmaps);
+      const preferredRoadmapId =
+        storedRoadmapId && roadmapData.some((r) => r.id === storedRoadmapId)
+          ? storedRoadmapId
+          : roadmapData[0]?.id;
+      if (preferredRoadmapId) {
+        setSelectedRoadmapId(preferredRoadmapId);
+        if (typeof window !== "undefined") localStorage.setItem(ROADMAP_STORAGE_KEY, preferredRoadmapId);
+        await loadChatsForRoadmap(preferredRoadmapId, token, statusMap[preferredRoadmapId]);
+      } else {
+        setChats([]);
+        setSelectedRoadmapId(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load roadmaps");
+      setStatusMessage("Failed to load roadmaps; showing mock data.");
+      setRoadmaps(mockRoadmaps);
+      setChats(mockChats);
       setSelectedRoadmapId(null);
     }
   };
 
   const hydrateWorkspace = async (token: string, activeUsername: string) => {
-    setSessionToken(token);
-    setActiveUser(activeUsername);
-    const projectData = await fetchProjects(token);
-    const mappedProjects = projectData.map((p) => ({
-      id: p.id,
-      name: p.name,
-      category: p.category ?? "Uncategorized",
-      status: (p.status as Status) ?? "active",
-      info: p.description ?? "",
-    }));
-    setProjects(mappedProjects);
-    const primary = projectData[0];
-    if (primary) {
-      setSelectedProjectId(primary.id);
-      await loadRoadmapsForProject(primary.id, token);
-    } else {
-      setRoadmaps([]);
-      setChats([]);
-      setSelectedProjectId(null);
-      setSelectedRoadmapId(null);
+    try {
+      setSessionToken(token);
+      setActiveUser(activeUsername);
+      const projectData = await fetchProjects(token);
+      const storedProjectId =
+        typeof window !== "undefined" ? localStorage.getItem(PROJECT_STORAGE_KEY) : null;
+      const mappedProjects = projectData.map((p) => ({
+        id: p.id,
+        name: p.name,
+        category: p.category ?? "Uncategorized",
+        status: (p.status as Status) ?? "active",
+        info: p.description ?? "",
+      }));
+      setProjects(mappedProjects);
+      const preferredProjectId =
+        storedProjectId && projectData.some((p) => p.id === storedProjectId)
+          ? storedProjectId
+          : projectData[0]?.id;
+      if (preferredProjectId) {
+        setSelectedProjectId(preferredProjectId);
+        if (typeof window !== "undefined") localStorage.setItem(PROJECT_STORAGE_KEY, preferredProjectId);
+        await loadRoadmapsForProject(preferredProjectId, token);
+      } else {
+        setRoadmaps([]);
+        setChats([]);
+        setSelectedProjectId(null);
+        setSelectedRoadmapId(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load projects");
+      fallbackToMockData("Backend unreachable; showing mock data.");
     }
   };
 
@@ -202,12 +246,7 @@ export default function Page() {
         await hydrateWorkspace(token, DEMO_USERNAME);
       } catch (err) {
         if (!cancelled) {
-          setError("Using mock data (backend unreachable)");
-          setSessionToken(null);
-          setActiveUser(null);
-          setProjects(mockProjects);
-          setRoadmaps(mockRoadmaps);
-          setChats(mockChats);
+          fallbackToMockData("Using mock data (backend unreachable)");
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -221,6 +260,7 @@ export default function Page() {
 
   const handleSelectRoadmap = async (roadmapId: string) => {
     setSelectedRoadmapId(roadmapId);
+    if (typeof window !== "undefined") localStorage.setItem(ROADMAP_STORAGE_KEY, roadmapId);
     if (sessionToken) {
       await loadChatsForRoadmap(roadmapId, sessionToken, roadmapStatus[roadmapId]);
     }
@@ -228,6 +268,7 @@ export default function Page() {
 
   const handleSelectProject = async (projectId: string) => {
     setSelectedProjectId(projectId);
+    if (typeof window !== "undefined") localStorage.setItem(PROJECT_STORAGE_KEY, projectId);
     if (sessionToken) {
       setSelectedRoadmapId(null);
       await loadRoadmapsForProject(projectId, sessionToken);
@@ -252,11 +293,7 @@ export default function Page() {
     } catch (err) {
       setError("Login failed; using mock data");
       setLoginError(err instanceof Error ? err.message : "Login failed");
-      setSessionToken(null);
-      setActiveUser(null);
-      setProjects(mockProjects);
-      setRoadmaps(mockRoadmaps);
-      setChats(mockChats);
+      fallbackToMockData("Login failed; showing mock data.");
     } finally {
       setLoading(false);
     }
@@ -326,6 +363,7 @@ export default function Page() {
             ? `Active user: ${activeUser} (token ${sessionToken.slice(0, 6)}…)`
             : "Active user: none (mock data)"}
         </div>
+        {statusMessage && <div className="item-subtle" style={{ color: "#F59E0B" }}>{statusMessage}</div>}
       </div>
       <div className="columns">
         <div className="column">
