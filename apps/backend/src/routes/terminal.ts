@@ -9,6 +9,8 @@ import { requireSession, validateToken } from "../utils/auth";
 import { findProject } from "../utils/projects";
 import { recordAuditEvent } from "../services/auditLogger";
 
+const DEFAULT_IDLE_MS = 10 * 60 * 1000;
+
 export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/terminal/sessions", async (request, reply) => {
     const session = await requireSession(request, reply);
@@ -59,8 +61,31 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
+    const idleEnv = Number(process.env.TERMINAL_IDLE_MS ?? "");
+    const idleTimeoutMs = Number.isFinite(idleEnv) && idleEnv > 0 ? idleEnv : DEFAULT_IDLE_MS;
+
     let socketClosed = false;
     let exitLogged = false;
+    let exitReason: "idle_timeout" | null = null;
+    let idleTimer: NodeJS.Timeout | null = null;
+
+    const resetIdleTimer = () => {
+      if (!idleTimeoutMs) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        exitReason = "idle_timeout";
+        socketClosed = true;
+        if (connection.socket.readyState === connection.socket.OPEN) {
+          connection.socket.send(
+            `\n[session closed after ${Math.round(idleTimeoutMs / 1000)}s idle timeout]\n`,
+          );
+          connection.socket.close(4000, "idle timeout");
+        }
+        closeTerminalSession(params.sessionId);
+      }, idleTimeoutMs);
+    };
+
+    resetIdleTimer();
 
     const handleStdout = (chunk: Buffer) => {
       if (connection.socket.readyState === connection.socket.OPEN) {
@@ -73,6 +98,8 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       }
     };
     const handleExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
       if (!exitLogged) {
         exitLogged = true;
         recordAuditEvent(fastify, {
@@ -80,11 +107,20 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
           projectId: managed.projectId ?? null,
           eventType: "terminal:exit",
           sessionId: managed.id,
-          metadata: { code: code ?? 0, signal: signal ?? null, ip: request.ip },
+          metadata: {
+            code: code ?? 0,
+            signal: signal ?? null,
+            ip: request.ip,
+            ...(exitReason ? { reason: exitReason, idleMs: idleTimeoutMs } : {}),
+          },
         }).catch((err) => fastify.log.error({ err }, "Failed to record terminal exit"));
       }
       if (!socketClosed && connection.socket.readyState === connection.socket.OPEN) {
-        connection.socket.send(`\n[process exited with code ${code ?? "0"}]\n`);
+        const exitMessage =
+          exitReason === "idle_timeout"
+            ? `\n[session closed after ${Math.round(idleTimeoutMs / 1000)}s idle timeout]\n`
+            : `\n[process exited with code ${code ?? "0"}]\n`;
+        connection.socket.send(exitMessage);
         connection.socket.close();
       }
     };
@@ -96,12 +132,15 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
     connection.socket.on("message", (data: Buffer) => {
       const input = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
       managed.proc.stdin.write(input);
+      resetIdleTimer();
     });
 
     connection.socket.on("close", () => {
       socketClosed = true;
       managed.proc.stdout.off("data", handleStdout);
       managed.proc.stderr.off("data", handleStderr);
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
       closeTerminalSession(params.sessionId);
     });
 
@@ -109,6 +148,8 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       socketClosed = true;
       managed.proc.stdout.off("data", handleStdout);
       managed.proc.stderr.off("data", handleStderr);
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
       closeTerminalSession(params.sessionId);
     });
 

@@ -126,3 +126,51 @@ test("terminal exit is audited when process ends", async () => {
     store.sessions.delete(session.token);
   }
 });
+
+test("terminal session is closed after idle timeout and audit includes reason", async () => {
+  const { root, restoreEnv } = withTempProjectsRoot();
+  const originalIdle = process.env.TERMINAL_IDLE_MS;
+  process.env.TERMINAL_IDLE_MS = "30";
+  const app = Fastify({ logger: false }) as FastifyInstance & { db: FakeDb };
+  app.db = new FakeDb();
+  await app.register(websocket);
+  await app.register(terminalRoutes);
+  await app.listen({ port: 0, host: "127.0.0.1" });
+
+  const session = createSession("idle-user");
+  let terminalSessionId: string | undefined;
+
+  try {
+    const start = await app.inject({
+      method: "POST",
+      url: "/terminal/sessions",
+      headers: { "x-session-token": session.token },
+      payload: { cwd: root },
+    });
+    assert.equal(start.statusCode, 201);
+    terminalSessionId = (start.json() as any).sessionId;
+
+    const url = `ws://127.0.0.1:${getPort(app)}/terminal/sessions/${terminalSessionId}/stream?token=${session.token}`;
+    const socket = new WebSocketImpl(url);
+    await new Promise<void>((resolve, reject) => {
+      socket.onmessage = () => {};
+      socket.onclose = () => resolve();
+      socket.onerror = (err: unknown) => reject(err);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(getTerminalSession(terminalSessionId!), undefined);
+
+    const exitEvent = app.db.auditInserts.find((row) => row.eventType === "terminal:exit");
+    assert.ok(exitEvent, "exit audit recorded");
+    assert.equal(exitEvent!.metadata?.reason, "idle_timeout");
+    assert.equal(exitEvent!.metadata?.idleMs, 30);
+  } finally {
+    if (terminalSessionId) closeTerminalSession(terminalSessionId);
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
+    restoreEnv();
+    store.sessions.delete(session.token);
+    process.env.TERMINAL_IDLE_MS = originalIdle;
+  }
+});
