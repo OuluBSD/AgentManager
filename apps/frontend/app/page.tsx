@@ -212,6 +212,16 @@ export default function Page() {
   const [auditCursor, setAuditCursor] = useState<string | null>(null);
   const [auditHasMore, setAuditHasMore] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [projectDraft, setProjectDraft] = useState({
+    name: "",
+    category: "",
+    description: "",
+  });
+  const [roadmapDraft, setRoadmapDraft] = useState({ title: "", tagsInput: "" });
+  const [chatDraft, setChatDraft] = useState({ title: "", goal: "" });
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [creatingRoadmap, setCreatingRoadmap] = useState(false);
+  const [creatingChat, setCreatingChat] = useState(false);
 
   const roadmapStatusRef = useRef(roadmapStatus);
   const auditFiltersRef = useRef(auditFilters);
@@ -283,6 +293,12 @@ export default function Page() {
     setFsDiffLoading(false);
     setFsBaseSha("");
     setFsTargetSha("HEAD");
+    setProjectDraft({ name: "", category: "", description: "" });
+    setRoadmapDraft({ title: "", tagsInput: "" });
+    setChatDraft({ title: "", goal: "" });
+    setCreatingProject(false);
+    setCreatingRoadmap(false);
+    setCreatingChat(false);
   }, []);
 
   const updateTerminalStatusFromText = (text: string) => {
@@ -535,6 +551,126 @@ export default function Page() {
       setSeeding(false);
     }
   }, [activeUser, hydrateWorkspace, projects.length, sessionToken, username]);
+
+  const handleCreateProject = useCallback(async () => {
+    if (!sessionToken) {
+      setStatusMessage("Login to create a project.");
+      return;
+    }
+    const name = projectDraft.name.trim();
+    if (!name) {
+      setStatusMessage("Project name is required.");
+      return;
+    }
+    setCreatingProject(true);
+    setError(null);
+    try {
+      const payload = {
+        name,
+        category: projectDraft.category.trim() || undefined,
+        description: projectDraft.description.trim() || undefined,
+      };
+      const { id } = await createProject(sessionToken, payload);
+      setProjectDraft({ name: "", category: "", description: "" });
+      const projectData = await fetchProjects(sessionToken);
+      const mappedProjects = projectData.map((p) => ({
+        id: p.id,
+        name: p.name,
+        category: p.category ?? "Uncategorized",
+        status: (p.status as Status) ?? "active",
+        info: p.description ?? "",
+      }));
+      setProjects(mappedProjects);
+      setSelectedProjectId(id);
+      if (typeof window !== "undefined") localStorage.setItem(PROJECT_STORAGE_KEY, id);
+      await loadRoadmapsForProject(id, sessionToken);
+      setStatusMessage("Project created.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create project");
+      setStatusMessage("Failed to create project.");
+    } finally {
+      setCreatingProject(false);
+    }
+  }, [loadRoadmapsForProject, projectDraft, sessionToken]);
+
+  const handleCreateRoadmap = useCallback(async () => {
+    if (!sessionToken || !selectedProjectId) {
+      setStatusMessage("Select a project to add a roadmap.");
+      return;
+    }
+    const title = roadmapDraft.title.trim();
+    if (!title) {
+      setStatusMessage("Roadmap title is required.");
+      return;
+    }
+    setCreatingRoadmap(true);
+    setError(null);
+    try {
+      const tags = roadmapDraft.tagsInput
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean);
+      const { id } = await createRoadmap(sessionToken, selectedProjectId, {
+        title,
+        tags,
+        status: "active",
+        progress: 0,
+      });
+      setRoadmapDraft({ title: "", tagsInput: "" });
+      await loadRoadmapsForProject(selectedProjectId, sessionToken);
+      setSelectedRoadmapId(id);
+      if (typeof window !== "undefined") localStorage.setItem(ROADMAP_STORAGE_KEY, id);
+      setStatusMessage("Roadmap created.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create roadmap");
+      setStatusMessage("Failed to create roadmap.");
+    } finally {
+      setCreatingRoadmap(false);
+    }
+  }, [
+    loadRoadmapsForProject,
+    roadmapDraft.tagsInput,
+    roadmapDraft.title,
+    selectedProjectId,
+    sessionToken,
+  ]);
+
+  const handleCreateChat = useCallback(async () => {
+    if (!sessionToken || !selectedRoadmapId) {
+      setStatusMessage("Select a roadmap to add a chat.");
+      return;
+    }
+    const title = chatDraft.title.trim();
+    if (!title) {
+      setStatusMessage("Chat title is required.");
+      return;
+    }
+    setCreatingChat(true);
+    setError(null);
+    try {
+      await createChat(sessionToken, selectedRoadmapId, {
+        title,
+        goal: chatDraft.goal.trim() || undefined,
+        status: "in_progress",
+        progress: 0,
+      });
+      setChatDraft({ title: "", goal: "" });
+      await loadChatsForRoadmap(selectedRoadmapId, sessionToken, roadmapStatus[selectedRoadmapId]);
+      setStatusMessage("Chat created.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create chat");
+      setStatusMessage("Failed to create chat.");
+    } finally {
+      setCreatingChat(false);
+    }
+  }, [
+    chatDraft.goal,
+    chatDraft.title,
+    loadChatsForRoadmap,
+    roadmapStatus,
+    selectedRoadmapId,
+    sessionToken,
+  ]);
 
   const connectTerminalStream = (sessionId: string, token: string) => {
     if (!sessionId || !token) return;
@@ -1162,6 +1298,39 @@ export default function Page() {
               {seeding ? "Seeding…" : "Seed demo"}
             </button>
           </header>
+          <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            <input
+              className="filter"
+              placeholder="Project name"
+              value={projectDraft.name}
+              onChange={(e) => setProjectDraft((prev) => ({ ...prev, name: e.target.value }))}
+              style={{ minWidth: 160 }}
+            />
+            <input
+              className="filter"
+              placeholder="Category"
+              value={projectDraft.category}
+              onChange={(e) => setProjectDraft((prev) => ({ ...prev, category: e.target.value }))}
+              style={{ minWidth: 120 }}
+            />
+            <input
+              className="filter"
+              placeholder="Description"
+              value={projectDraft.description}
+              onChange={(e) =>
+                setProjectDraft((prev) => ({ ...prev, description: e.target.value }))
+              }
+              style={{ flex: 1, minWidth: 180 }}
+            />
+            <button
+              className="tab"
+              onClick={handleCreateProject}
+              disabled={creatingProject || !sessionToken}
+              title={sessionToken ? "" : "Login required"}
+            >
+              {creatingProject ? "Creating…" : "+ Project"}
+            </button>
+          </div>
           {loading && <div className="item-subtle">Loading projects…</div>}
           {error && <div className="item-subtle">{error}</div>}
           <div className="list">
@@ -1191,8 +1360,33 @@ export default function Page() {
         <div className="column">
           <header className="column-header">
             <span>Roadmap Lists</span>
-            <button className="ghost">+ New</button>
           </header>
+          <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            <input
+              className="filter"
+              placeholder="Roadmap title"
+              value={roadmapDraft.title}
+              onChange={(e) => setRoadmapDraft((prev) => ({ ...prev, title: e.target.value }))}
+              style={{ minWidth: 160 }}
+              disabled={!selectedProjectId}
+            />
+            <input
+              className="filter"
+              placeholder="Tags (comma separated)"
+              value={roadmapDraft.tagsInput}
+              onChange={(e) => setRoadmapDraft((prev) => ({ ...prev, tagsInput: e.target.value }))}
+              style={{ flex: 1, minWidth: 180 }}
+              disabled={!selectedProjectId}
+            />
+            <button
+              className="tab"
+              onClick={handleCreateRoadmap}
+              disabled={creatingRoadmap || !sessionToken || !selectedProjectId}
+              title={selectedProjectId ? "" : "Select a project first"}
+            >
+              {creatingRoadmap ? "Creating…" : "+ Roadmap"}
+            </button>
+          </div>
           <div className="list">
             {roadmaps.length === 0 && selectedProjectId && (
               <div className="item-subtle">No roadmaps for this project yet.</div>
@@ -1220,8 +1414,33 @@ export default function Page() {
         <div className="column">
           <header className="column-header">
             <span>Chats</span>
-            <button className="ghost">+ Chat</button>
           </header>
+          <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            <input
+              className="filter"
+              placeholder="Chat title"
+              value={chatDraft.title}
+              onChange={(e) => setChatDraft((prev) => ({ ...prev, title: e.target.value }))}
+              style={{ minWidth: 160 }}
+              disabled={!selectedRoadmapId}
+            />
+            <input
+              className="filter"
+              placeholder="Goal"
+              value={chatDraft.goal}
+              onChange={(e) => setChatDraft((prev) => ({ ...prev, goal: e.target.value }))}
+              style={{ flex: 1, minWidth: 200 }}
+              disabled={!selectedRoadmapId}
+            />
+            <button
+              className="tab"
+              onClick={handleCreateChat}
+              disabled={creatingChat || !sessionToken || !selectedRoadmapId}
+              title={selectedRoadmapId ? "" : "Select a roadmap first"}
+            >
+              {creatingChat ? "Creating…" : "+ Chat"}
+            </button>
+          </div>
           <div className="list">
             {chats.length === 0 && selectedRoadmapId && (
               <div className="item-subtle">No chats for this roadmap yet.</div>
