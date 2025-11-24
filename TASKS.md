@@ -157,7 +157,7 @@ Implement DB models + TypeScript interfaces:
 - [x] List of relevant roadmap tasks
 - [x] Link to template
 - [x] Buttons: Mark Done / Request Status / Open Meta-Chat
-- [ ] Button: Open Folder
+- [x] Button: Open Folder
 
 ### 8.2 Message Stream
 
