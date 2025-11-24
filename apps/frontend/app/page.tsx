@@ -438,10 +438,21 @@ export default function Page() {
       }
     };
 
-    ws.onerror = () => setTerminalOutput((prev) => `${prev}\n[stream error]\n`);
-    ws.onclose = () => {
+    ws.onerror = (event) => {
+      const message = (event as ErrorEvent)?.message ?? "socket error";
+      setTerminalOutput((prev) => `${prev}\n[stream error: ${message}]\n`);
       setTerminalConnecting(false);
-      setTerminalOutput((prev) => `${prev}\n[stream closed]\n`);
+    };
+    ws.onclose = (event) => {
+      setTerminalConnecting(false);
+      const reason =
+        event.reason ||
+        (event.code === 1008 ? "unauthorized" : event.code === 1006 ? "abnormal closure" : "");
+      if (event.code === 1008) {
+        setStatusMessage("Terminal auth failed. Try logging in again.");
+        setTerminalSessionId(null);
+      }
+      setTerminalOutput((prev) => `${prev}\n[stream closed (${event.code}${reason ? `: ${reason}` : ""})]\n`);
     };
   };
 
