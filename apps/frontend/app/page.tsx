@@ -101,6 +101,9 @@ export default function Page() {
   const [fsError, setFsError] = useState<string | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditCursor, setAuditCursor] = useState<string | null>(null);
+  const [auditHasMore, setAuditHasMore] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   const ensureStatus = async (roadmapId: string, token: string) => {
     const existing = roadmapStatus[roadmapId];
@@ -479,23 +482,40 @@ export default function Page() {
     }
   }, [sessionToken, selectedProjectId]);
 
-  const loadAuditLog = async (projectId?: string) => {
+  const loadAuditLog = async (projectId?: string, options?: { reset?: boolean }) => {
     if (!sessionToken) return;
+    const before = options?.reset ? undefined : auditCursor ?? undefined;
+    if (options?.reset) {
+      setAuditEvents([]);
+      setAuditCursor(null);
+      setAuditHasMore(false);
+    }
+    setAuditLoading(true);
     try {
-      const { events } = await fetchAuditEvents(sessionToken, projectId, 50);
-      setAuditEvents(events);
+      const { events, paging } = await fetchAuditEvents(sessionToken, projectId, 50, before);
+      setAuditEvents((prev) => (options?.reset ? events : [...prev, ...events]));
+      setAuditCursor(paging?.nextCursor ?? null);
+      setAuditHasMore(Boolean(paging?.hasMore));
       setAuditError(null);
     } catch (err) {
-      setAuditEvents([]);
+      if (options?.reset) {
+        setAuditEvents([]);
+        setAuditCursor(null);
+      }
+      setAuditHasMore(false);
       setAuditError(err instanceof Error ? err.message : "Failed to load audit events");
+    } finally {
+      setAuditLoading(false);
     }
   };
 
   useEffect(() => {
     if (sessionToken) {
-      loadAuditLog(selectedProjectId ?? undefined);
+      loadAuditLog(selectedProjectId ?? undefined, { reset: true });
     } else {
       setAuditEvents([]);
+      setAuditCursor(null);
+      setAuditHasMore(false);
     }
   }, [sessionToken, selectedProjectId]);
 
@@ -718,6 +738,22 @@ export default function Page() {
       <div className="panel-card" style={{ marginTop: 12 }}>
         <div className="panel-title">Recent Activity</div>
         <div className="panel-text">Latest file/terminal actions (backend DB required).</div>
+        <div className="login-row" style={{ gap: 8, marginBottom: 8 }}>
+          <button
+            className="tab"
+            onClick={() => loadAuditLog(selectedProjectId ?? undefined, { reset: true })}
+            disabled={auditLoading}
+          >
+            {auditLoading ? "Loading…" : "Refresh"}
+          </button>
+          <button
+            className="ghost"
+            onClick={() => loadAuditLog(selectedProjectId ?? undefined)}
+            disabled={!auditHasMore || auditLoading}
+          >
+            {auditLoading ? "Loading…" : auditHasMore ? "Load more" : "No more events"}
+          </button>
+        </div>
         {auditError && <div className="item-subtle" style={{ color: "#EF4444" }}>{auditError}</div>}
         <div className="list" style={{ maxHeight: 260, overflow: "auto" }}>
           {auditEvents.length === 0 && <div className="item-subtle">No audit events yet.</div>}
@@ -732,6 +768,7 @@ export default function Page() {
               <div className="item-sub">{event.path ?? event.sessionId ?? "N/A"}</div>
             </div>
           ))}
+          {auditLoading && <div className="item-subtle">Loading…</div>}
         </div>
       </div>
     </main>

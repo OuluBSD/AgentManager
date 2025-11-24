@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt, type SQL } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import * as schema from "@nexus/shared/db/schema";
 import { requireSession } from "../utils/auth";
@@ -11,8 +11,9 @@ export const auditRoutes: FastifyPluginAsync = async (fastify) => {
       reply.send({ events: [], paging: { hasMore: false } });
       return;
     }
-    const query = request.query as { projectId?: string; limit?: string };
+    const query = request.query as { projectId?: string; limit?: string; before?: string };
     const limit = Math.min(Number(query.limit ?? 50) || 50, 200);
+    const beforeDate = query.before ? new Date(query.before) : null;
 
     let builder = fastify.db
       .select({
@@ -29,12 +30,25 @@ export const auditRoutes: FastifyPluginAsync = async (fastify) => {
       .orderBy(desc(schema.auditEvents.createdAt))
       .limit(limit);
 
+    const whereClauses: SQL[] = [];
     if (query.projectId) {
-      builder = builder.where(eq(schema.auditEvents.projectId, query.projectId));
+      whereClauses.push(eq(schema.auditEvents.projectId, query.projectId));
+    }
+    if (beforeDate && !Number.isNaN(beforeDate.getTime())) {
+      whereClauses.push(lt(schema.auditEvents.createdAt, beforeDate));
+    }
+    if (whereClauses.length) {
+      builder = builder.where(whereClauses.length === 1 ? whereClauses[0] : and(...whereClauses));
     }
 
     const rows = await builder;
 
-    reply.send({ events: rows, paging: { hasMore: rows.length === limit } });
+    reply.send({
+      events: rows,
+      paging: {
+        hasMore: rows.length === limit,
+        nextCursor: rows.length ? rows[rows.length - 1].createdAt.toISOString() : undefined,
+      },
+    });
   });
 };

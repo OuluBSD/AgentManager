@@ -121,10 +121,15 @@ export function buildTerminalWsUrl(token: string, sessionId: string) {
 export async function fetchAuditEvents(
   token: string,
   projectId?: string,
-  limit = 50
-): Promise<{ events: { id: string; eventType: string; path?: string | null; createdAt: string; sessionId?: string | null }[] }> {
+  limit = 50,
+  before?: string
+): Promise<{
+  events: { id: string; eventType: string; path?: string | null; createdAt: string; sessionId?: string | null }[];
+  paging?: { hasMore: boolean; nextCursor?: string };
+}> {
   const params = new URLSearchParams();
   if (projectId) params.set("projectId", projectId);
   if (limit) params.set("limit", String(limit));
+  if (before) params.set("before", before);
   return fetchWithAuth(token, `/api/audit/events?${params.toString()}`);
 }
