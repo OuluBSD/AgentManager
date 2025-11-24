@@ -88,6 +88,9 @@ function summarizeAuditMeta(meta?: Record<string, unknown> | null) {
     const withEllipsis = data.truncated ? `${data.preview}…` : data.preview;
     parts.push(`“${withEllipsis}”`);
   }
+  if (typeof data.ip === "string" && data.ip.length) {
+    parts.push(`ip ${data.ip}`);
+  }
   if (typeof data.cwd === "string" && data.cwd.length) {
     parts.push(`cwd ${data.cwd}`);
   }
@@ -616,6 +619,12 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    if (!fsSaveStatus) return;
+    const timer = setTimeout(() => setFsSaveStatus(null), 2500);
+    return () => clearTimeout(timer);
+  }, [fsSaveStatus]);
+
+  useEffect(() => {
     setFsEntries([]);
     setFsContent("");
     setFsContentPath(null);
@@ -751,6 +760,7 @@ export default function Page() {
               </button>
             </div>
             {fsError && <div className="item-subtle" style={{ color: "#EF4444" }}>{fsError}</div>}
+            {fsLoading && <div className="item-subtle">Loading files…</div>}
             <div className="panel-text" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {fsEntries.map((entry) => (
                 <button
