@@ -16,10 +16,10 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 ---
 
 ## 1. Repository & Core Setup
-- [ ] Initialize monorepo structure (`apps/frontend`, `apps/backend`, `packages/shared`)
-- [ ] Install Next.js (frontend)
-- [ ] Install Node/TypeScript backend (Express/Nest/Fastify)
-- [ ] Configure database layer (Prisma or Drizzle)
+- [x] Initialize monorepo structure (`apps/frontend`, `apps/backend`, `packages/shared`)
+- [x] Install Next.js (frontend)
+- [x] Install Node/TypeScript backend (Express/Nest/Fastify)
+- [x] Configure database layer (Prisma or Drizzle)
 - [ ] Create `.env` templates for model providers
 - [ ] Establish Git repo with base project structure
 - [ ] Add Prettier, ESLint, lint-staged, Husky
