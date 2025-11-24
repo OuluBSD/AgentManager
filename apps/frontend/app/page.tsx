@@ -97,6 +97,18 @@ function summarizeAuditMeta(meta?: Record<string, unknown> | null) {
   if (typeof data.entryCount === "number") {
     parts.push(`${data.entryCount} entries`);
   }
+  if (typeof data.code === "number") {
+    parts.push(`code ${data.code}`);
+  }
+  if (typeof data.signal === "string" && data.signal.length) {
+    parts.push(`signal ${data.signal}`);
+  }
+  if (typeof data.reason === "string" && data.reason.length) {
+    const idleSeconds =
+      typeof data.idleMs === "number" ? Math.round(Number(data.idleMs) / 1000) : null;
+    const reasonText = idleSeconds ? `${data.reason} (${idleSeconds}s)` : data.reason;
+    parts.push(`reason ${reasonText}`);
+  }
   if (typeof data.bytes === "number") {
     parts.push(`${data.bytes} bytes`);
   }
