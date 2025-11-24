@@ -41,6 +41,9 @@ High-level REST + WebSocket contracts for the MVP. Paths are prefixed with `/api
 - `WS /terminal/sessions/:sessionId/stream` – bidirectional (input/output)
 - `POST /terminal/sessions/:sessionId/input` – { data }
 
+## Audit Events
+- `GET /audit/events` – filters: projectId, eventType, userId, pathContains, ipAddress, before|cursor, limit (≤200), sort (asc|desc) → { events, paging: { hasMore, nextCursor } }
+
 ## Snapshots
 - `POST /projects/:projectId/snapshots` – create git snapshot → { gitSha }
 - `GET /projects/:projectId/snapshots` – list snapshots
