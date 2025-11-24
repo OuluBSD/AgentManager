@@ -5,6 +5,13 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 
 ---
 
+## Near-Term Focus
+- [x] Document audit `ipAddress` filter in API contracts
+- [ ] Add Code tab toast for file-save errors (mirror success case)
+- [ ] Run full backend/frontend test suites after recent changes
+
+---
+
 ## 1. Repository & Core Setup
 - [ ] Initialize monorepo structure (`apps/frontend`, `apps/backend`, `packages/shared`)
 - [ ] Install Next.js (frontend)
@@ -243,4 +250,3 @@ Implement DB models + TypeScript interfaces:
 
 # End of Expanded TASKS
 This document is expected to grow and evolve as Project Nexus matures.
-

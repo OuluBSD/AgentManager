@@ -38,6 +38,10 @@ These items define the minimum viable implementation capable of handling multiâ€
 - Expose it via WebSocket.
 - Add xterm.js frontend component in split view.
 
+### 1.5 Audit Visibility
+- Expand audit log filtering (userId, eventType, path, ipAddress) to support security reviews.
+- Surface filtered results in UI for admins and project owners.
+
 ---
 
 ## 2. Early Growth (Core Features)
@@ -150,4 +154,3 @@ The system should grow organically, adapting to insights gathered from actual us
 
 ## 6. Roadmap Status
 This roadmap is a living document. Items will shift, merge, or disappear as Project Nexus matures and real-world feedback shapes the system's trajectory.
-
