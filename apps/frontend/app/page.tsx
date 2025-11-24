@@ -61,6 +61,7 @@ type ChatItem = {
   goal?: string;
   focus?: string;
   templateId?: string;
+  metadata?: Record<string, unknown> | null;
 };
 type MessageItem = {
   id: string;
@@ -180,6 +181,16 @@ function summarizeAuditMeta(meta?: Record<string, unknown> | null) {
     return fallback.slice(0, 160) + (fallback.length > 160 ? "…" : "");
   }
   return parts.join(" · ");
+}
+
+function readWorkspacePath(meta?: Record<string, unknown> | null) {
+  if (!meta) return null;
+  const fields = ["workspacePath", "folder", "path", "cwd", "dir", "root"];
+  for (const key of fields) {
+    const value = (meta as Record<string, unknown>)[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 export default function Page() {
@@ -490,6 +501,7 @@ export default function Page() {
               focus: focus ?? undefined,
               goal: c.goal,
               templateId: c.templateId,
+              metadata: c.metadata ?? null,
             };
           }),
         ].filter(Boolean) as ChatItem[];
@@ -1384,6 +1396,8 @@ export default function Page() {
   const templateForChat = selectedChat?.templateId
     ? templates.find((t) => t.id === selectedChat.templateId)
     : null;
+  const folderHint =
+    readWorkspacePath(selectedChat?.metadata) ?? readWorkspacePath(templateForChat?.metadata);
   const roadmapMeta = selectedRoadmapId ? metaChats[selectedRoadmapId] : null;
   const roadmapSummary = selectedRoadmapId ? roadmapStatus[selectedRoadmapId] : null;
   const siblingTasks = chats.filter((chat) => !chat.meta && chat.id && chat.id !== selectedChatId);
@@ -1653,6 +1667,34 @@ export default function Page() {
               <button
                 className="ghost"
                 onClick={() => {
+                  setActiveTab("Code");
+                  const targetPath = folderHint || ".";
+                  if (!sessionToken || !selectedProjectId) {
+                    setFsToast({
+                      message: "Login to browse files",
+                      detail: "Select a project to open folders.",
+                      tone: "error",
+                    });
+                    return;
+                  }
+                  setFsPath(targetPath);
+                  loadFsTree(targetPath);
+                  if (!folderHint) {
+                    setFsToast({
+                      message: "No folder hint for this chat",
+                      detail: "Opened project root instead.",
+                      tone: "error",
+                    });
+                  } else {
+                    setFsToast({ message: "Opening folder", detail: targetPath, tone: "success" });
+                  }
+                }}
+              >
+                Open folder
+              </button>
+              <button
+                className="ghost"
+                onClick={() => {
                   const metaId = selectedRoadmapId ? `meta-${selectedRoadmapId}` : null;
                   if (!metaId) return;
                   const meta = chats.find((chat) => chat.id === metaId);
@@ -1675,6 +1717,13 @@ export default function Page() {
               <span className="item-pill" title={selectedChat.goal ?? ""}>
                 Goal: {selectedChat.goal ?? "—"}
               </span>
+              {folderHint ? (
+                <span className="item-pill" title={folderHint}>
+                  Folder: {folderHint}
+                </span>
+              ) : (
+                <span className="item-subtle">Folder: project root</span>
+              )}
               {roadmapSummary && (
                 <span className="item-pill" title={roadmapSummary.summary ?? ""}>
                   Roadmap: {progressPercent(roadmapSummary.progress)}% · {roadmapSummary.status}
