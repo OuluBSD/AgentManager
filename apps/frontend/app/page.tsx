@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   buildTerminalWsUrl,
   createTerminalSession,
@@ -194,6 +195,9 @@ function readWorkspacePath(meta?: Record<string, unknown> | null) {
 }
 
 export default function Page() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [roadmaps, setRoadmaps] = useState<RoadmapItem[]>([]);
   const [chats, setChats] = useState<ChatItem[]>([]);
@@ -278,11 +282,30 @@ export default function Page() {
   const [creatingProject, setCreatingProject] = useState(false);
   const [creatingRoadmap, setCreatingRoadmap] = useState(false);
   const [creatingChat, setCreatingChat] = useState(false);
+  const initialSelectionRef = useRef({
+    projectId: searchParams.get("project"),
+    roadmapId: searchParams.get("roadmap"),
+    chatId: searchParams.get("chat"),
+  });
 
   const roadmapStatusRef = useRef(roadmapStatus);
   const auditFiltersRef = useRef(auditFilters);
   const auditCursorRef = useRef(auditCursor);
   const fsPathRef = useRef(fsPath);
+
+  const syncUrlSelection = useCallback(
+    (projectId: string | null, roadmapId: string | null, chatId: string | null) => {
+      if (typeof window === "undefined") return;
+      const params = new URLSearchParams();
+      if (projectId) params.set("project", projectId);
+      if (roadmapId) params.set("roadmap", roadmapId);
+      if (chatId) params.set("chat", chatId);
+      const query = params.toString();
+      const target = query ? `${pathname}?${query}` : pathname;
+      router.replace(target);
+    },
+    [pathname, router]
+  );
 
   useEffect(() => {
     roadmapStatusRef.current = roadmapStatus;
@@ -400,55 +423,59 @@ export default function Page() {
     }
   }, []);
 
-  const clearWorkspaceState = useCallback((reason?: string) => {
-    if (reason) setStatusMessage(reason);
-    setSessionToken(null);
-    setActiveUser(null);
-    setProjects([]);
-    setRoadmaps([]);
-    setRoadmapStatus({});
-    roadmapStatusRef.current = {};
-    setChats([]);
-    setMetaChats({});
-    setTemplates([]);
-    setSelectedProjectId(null);
-    setSelectedRoadmapId(null);
-    setSelectedChatId(null);
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(PROJECT_STORAGE_KEY);
-      localStorage.removeItem(ROADMAP_STORAGE_KEY);
-      localStorage.removeItem(CHAT_STORAGE_KEY);
-    }
-    setTerminalSessionId(null);
-    setTerminalOutput("Connect to stream to see output.");
-    setTerminalStatus(null);
-    setFsEntries([]);
-    setFsContent("");
-    setFsContentPath(null);
-    setFsPath(".");
-    setFsDraft("");
-    setFsSaving(false);
-    setFsSaveStatus(null);
-    setFsDiff("");
-    setFsDiffError(null);
-    setFsDiffLoaded(false);
-    setFsDiffLoading(false);
-    setFsBaseSha("");
-    setFsTargetSha("HEAD");
-    setProjectDraft({ name: "", category: "", description: "" });
-    setRoadmapDraft({ title: "", tagsInput: "" });
-    setChatDraft({ title: "", goal: "" });
-    setCreatingProject(false);
-    setCreatingRoadmap(false);
-    setCreatingChat(false);
-    setMessages([]);
-    setMessagesError(null);
-    setMessageDraft("");
-    setChatProgressDraft("0");
-    setChatStatusDraft("in_progress");
-    setChatFocusDraft("");
-    setChatUpdateMessage(null);
-  }, []);
+  const clearWorkspaceState = useCallback(
+    (reason?: string) => {
+      if (reason) setStatusMessage(reason);
+      setSessionToken(null);
+      setActiveUser(null);
+      setProjects([]);
+      setRoadmaps([]);
+      setRoadmapStatus({});
+      roadmapStatusRef.current = {};
+      setChats([]);
+      setMetaChats({});
+      setTemplates([]);
+      setSelectedProjectId(null);
+      setSelectedRoadmapId(null);
+      setSelectedChatId(null);
+      syncUrlSelection(null, null, null);
+      if (typeof window !== "undefined") {
+        localStorage.removeItem(PROJECT_STORAGE_KEY);
+        localStorage.removeItem(ROADMAP_STORAGE_KEY);
+        localStorage.removeItem(CHAT_STORAGE_KEY);
+      }
+      setTerminalSessionId(null);
+      setTerminalOutput("Connect to stream to see output.");
+      setTerminalStatus(null);
+      setFsEntries([]);
+      setFsContent("");
+      setFsContentPath(null);
+      setFsPath(".");
+      setFsDraft("");
+      setFsSaving(false);
+      setFsSaveStatus(null);
+      setFsDiff("");
+      setFsDiffError(null);
+      setFsDiffLoaded(false);
+      setFsDiffLoading(false);
+      setFsBaseSha("");
+      setFsTargetSha("HEAD");
+      setProjectDraft({ name: "", category: "", description: "" });
+      setRoadmapDraft({ title: "", tagsInput: "" });
+      setChatDraft({ title: "", goal: "" });
+      setCreatingProject(false);
+      setCreatingRoadmap(false);
+      setCreatingChat(false);
+      setMessages([]);
+      setMessagesError(null);
+      setMessageDraft("");
+      setChatProgressDraft("0");
+      setChatStatusDraft("in_progress");
+      setChatFocusDraft("");
+      setChatUpdateMessage(null);
+    },
+    [syncUrlSelection]
+  );
 
   const updateTerminalStatusFromText = (text: string) => {
     if (!text) return;
@@ -467,7 +494,9 @@ export default function Page() {
     async (
       roadmapId: string,
       token: string,
-      statusHint?: { status: Status; progress: number; summary?: string }
+      statusHint?: { status: Status; progress: number; summary?: string },
+      chatHint?: string | null,
+      projectHint?: string | null
     ) => {
       try {
         const status = statusHint ?? (await ensureStatus(roadmapId, token));
@@ -506,11 +535,14 @@ export default function Page() {
           }),
         ].filter(Boolean) as ChatItem[];
         setChats(mappedChats);
+        const hintedChatId =
+          chatHint && mappedChats.some((c) => c.id === chatHint) ? chatHint : null;
         const storedChatId = readStoredChat(roadmapId);
         const fallbackChatId =
-          storedChatId && mappedChats.some((c) => c.id === storedChatId)
+          hintedChatId ??
+          (storedChatId && mappedChats.some((c) => c.id === storedChatId)
             ? storedChatId
-            : (mappedChats.find((c) => c.id && !c.meta)?.id ?? null);
+            : (mappedChats.find((c) => c.id && !c.meta)?.id ?? null));
         setSelectedChatId(fallbackChatId);
         if (fallbackChatId) {
           persistChatSelection(roadmapId, fallbackChatId);
@@ -518,6 +550,7 @@ export default function Page() {
         } else {
           setMessages([]);
         }
+        syncUrlSelection(projectHint ?? selectedProjectId, roadmapId, fallbackChatId);
         setStatusMessage(mappedChats.length ? null : "No chats for this roadmap yet.");
       } catch (err) {
         setStatusMessage("Failed to load chats.");
@@ -532,11 +565,17 @@ export default function Page() {
       metaChats,
       persistChatSelection,
       readStoredChat,
+      selectedProjectId,
+      syncUrlSelection,
     ]
   );
 
   const loadRoadmapsForProject = useCallback(
-    async (projectId: string, token: string) => {
+    async (
+      projectId: string,
+      token: string,
+      selectionHint?: { roadmapId?: string | null; chatId?: string | null }
+    ) => {
       try {
         const roadmapData = await fetchRoadmaps(token, projectId);
         const storedRoadmapId =
@@ -576,15 +615,27 @@ export default function Page() {
         }));
         setRoadmaps(mappedRoadmaps);
         setStatusMessage(roadmapData.length ? null : "No roadmaps for this project yet.");
+        const hintedRoadmapId =
+          selectionHint?.roadmapId && roadmapData.some((r) => r.id === selectionHint.roadmapId)
+            ? selectionHint.roadmapId
+            : null;
         const preferredRoadmapId =
-          storedRoadmapId && roadmapData.some((r) => r.id === storedRoadmapId)
+          hintedRoadmapId ??
+          (storedRoadmapId && roadmapData.some((r) => r.id === storedRoadmapId)
             ? storedRoadmapId
-            : roadmapData[0]?.id;
+            : roadmapData[0]?.id);
         if (preferredRoadmapId) {
           setSelectedRoadmapId(preferredRoadmapId);
           if (typeof window !== "undefined")
             localStorage.setItem(ROADMAP_STORAGE_KEY, preferredRoadmapId);
-          await loadChatsForRoadmap(preferredRoadmapId, token, statusMap[preferredRoadmapId]);
+          setSelectedChatId(null);
+          await loadChatsForRoadmap(
+            preferredRoadmapId,
+            token,
+            statusMap[preferredRoadmapId],
+            selectionHint?.chatId ?? null,
+            projectId
+          );
         } else {
           setChats([]);
           setSelectedRoadmapId(null);
@@ -592,6 +643,7 @@ export default function Page() {
           setMessages([]);
           setMessageDraft("");
           setMessagesError(null);
+          syncUrlSelection(projectId, null, null);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load roadmaps");
@@ -605,7 +657,7 @@ export default function Page() {
         setMessagesError(null);
       }
     },
-    [loadChatsForRoadmap]
+    [loadChatsForRoadmap, syncUrlSelection]
   );
 
   const hydrateWorkspace = useCallback(
@@ -620,8 +672,13 @@ export default function Page() {
           setTemplates([]);
         }
         const projectData = await fetchProjects(token);
+        const initialSelection = initialSelectionRef.current;
         const storedProjectId =
           typeof window !== "undefined" ? localStorage.getItem(PROJECT_STORAGE_KEY) : null;
+        const hintedProjectId =
+          initialSelection.projectId && projectData.some((p) => p.id === initialSelection.projectId)
+            ? initialSelection.projectId
+            : null;
         const mappedProjects = projectData.map((p) => ({
           id: p.id,
           name: p.name,
@@ -634,14 +691,20 @@ export default function Page() {
           projectData.length ? null : "No projects found. Seed demo data to get started."
         );
         const preferredProjectId =
-          storedProjectId && projectData.some((p) => p.id === storedProjectId)
+          hintedProjectId ??
+          (storedProjectId && projectData.some((p) => p.id === storedProjectId)
             ? storedProjectId
-            : projectData[0]?.id;
+            : projectData[0]?.id);
         if (preferredProjectId) {
           setSelectedProjectId(preferredProjectId);
           if (typeof window !== "undefined")
             localStorage.setItem(PROJECT_STORAGE_KEY, preferredProjectId);
-          await loadRoadmapsForProject(preferredProjectId, token);
+          const roadmapHint =
+            preferredProjectId === hintedProjectId
+              ? { roadmapId: initialSelection.roadmapId, chatId: initialSelection.chatId }
+              : undefined;
+          await loadRoadmapsForProject(preferredProjectId, token, roadmapHint);
+          initialSelectionRef.current = { projectId: null, roadmapId: null, chatId: null };
         } else {
           setRoadmaps([]);
           setChats([]);
@@ -686,9 +749,16 @@ export default function Page() {
     setMessages([]);
     setMessageDraft("");
     setMessagesError(null);
+    syncUrlSelection(selectedProjectId, roadmapId, null);
     if (typeof window !== "undefined") localStorage.setItem(ROADMAP_STORAGE_KEY, roadmapId);
     if (sessionToken) {
-      await loadChatsForRoadmap(roadmapId, sessionToken, roadmapStatus[roadmapId]);
+      await loadChatsForRoadmap(
+        roadmapId,
+        sessionToken,
+        roadmapStatus[roadmapId],
+        null,
+        selectedProjectId
+      );
     }
   };
 
@@ -698,6 +768,7 @@ export default function Page() {
     setMessages([]);
     setMessageDraft("");
     setMessagesError(null);
+    syncUrlSelection(projectId, null, null);
     if (typeof window !== "undefined") localStorage.setItem(PROJECT_STORAGE_KEY, projectId);
     if (sessionToken) {
       setSelectedRoadmapId(null);
@@ -714,6 +785,7 @@ export default function Page() {
       if (selectedRoadmapId) {
         persistChatSelection(selectedRoadmapId, chat.id);
       }
+      syncUrlSelection(selectedProjectId, selectedRoadmapId, chat.id);
       if (sessionToken && !chat.meta) {
         await loadMessagesForChat(chat.id, sessionToken);
       } else if (chat.meta) {
@@ -721,7 +793,14 @@ export default function Page() {
         setMessagesError("Meta-chat messages are not shown yet.");
       }
     },
-    [loadMessagesForChat, persistChatSelection, selectedRoadmapId, sessionToken]
+    [
+      loadMessagesForChat,
+      persistChatSelection,
+      selectedProjectId,
+      selectedRoadmapId,
+      sessionToken,
+      syncUrlSelection,
+    ]
   );
 
   const handleLoginSubmit = async () => {
@@ -879,7 +958,13 @@ export default function Page() {
       });
       setChatDraft({ title: "", goal: "" });
       persistChatSelection(selectedRoadmapId, id);
-      await loadChatsForRoadmap(selectedRoadmapId, sessionToken, roadmapStatus[selectedRoadmapId]);
+      await loadChatsForRoadmap(
+        selectedRoadmapId,
+        sessionToken,
+        roadmapStatus[selectedRoadmapId],
+        id,
+        selectedProjectId
+      );
       setSelectedChatId(id);
       await loadMessagesForChat(id, sessionToken);
       setStatusMessage("Chat created.");
@@ -894,6 +979,7 @@ export default function Page() {
     chatDraft.title,
     loadChatsForRoadmap,
     roadmapStatus,
+    selectedProjectId,
     selectedRoadmapId,
     sessionToken,
     persistChatSelection,
