@@ -46,6 +46,7 @@ type AuditEvent = {
   ipAddress?: string | null;
   metadata?: Record<string, unknown> | null;
 };
+type ToastMessage = { message: string; detail?: string; tone: "success" | "error" };
 
 const mockProjects: ProjectItem[] = [
   { name: "Atlas Compute", category: "Infra", status: "active", info: "LLM orchestration spine" },
@@ -172,7 +173,7 @@ export default function Page() {
   const [fsDiffLoaded, setFsDiffLoaded] = useState(false);
   const [fsBaseSha, setFsBaseSha] = useState<string>("");
   const [fsTargetSha, setFsTargetSha] = useState<string>("HEAD");
-  const [fsToast, setFsToast] = useState<string | null>(null);
+  const [fsToast, setFsToast] = useState<ToastMessage | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditFilters, setAuditFilters] = useState<{ eventType: string; userId: string; pathContains: string; ipAddress: string }>({
     eventType: "",
@@ -665,9 +666,11 @@ export default function Page() {
       );
       setFsContent(fsDraft);
       setFsSaveStatus("Saved");
-      setFsToast(`Saved ${fsContentPath}`);
+      setFsToast({ message: "File saved", detail: fsContentPath, tone: "success" });
     } catch (err) {
-      setFsError(err instanceof Error ? err.message : "Failed to save file");
+      const message = err instanceof Error ? err.message : "Failed to save file";
+      setFsError(message);
+      setFsToast({ message: "Save failed", detail: message, tone: "error" });
     } finally {
       setFsSaving(false);
     }
@@ -1195,9 +1198,9 @@ export default function Page() {
         </div>
       </div>
       {fsToast && (
-        <div className="toast toast-success">
-          <span style={{ fontWeight: 700 }}>File saved</span>
-          <div className="item-subtle">{fsToast}</div>
+        <div className={`toast ${fsToast.tone === "error" ? "toast-error" : "toast-success"}`}>
+          <span style={{ fontWeight: 700 }}>{fsToast.message}</span>
+          {fsToast.detail && <div className="item-subtle">{fsToast.detail}</div>}
         </div>
       )}
     </main>

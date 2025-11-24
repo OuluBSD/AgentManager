@@ -218,6 +218,12 @@ body {
   color: #bbf7d0;
 }
 
+.toast-error {
+  color: #fecdd3;
+  background: linear-gradient(135deg, rgba(248, 113, 113, 0.16), rgba(239, 68, 68, 0.12));
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
 @media (max-width: 1200px) {
   .columns {
     grid-template-columns: repeat(2, 1fr);
