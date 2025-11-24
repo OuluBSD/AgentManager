@@ -1,4 +1,5 @@
 # Project Nexus – Expanded Task Breakdown
+
 A comprehensive work plan aligned with the finalized UX, agent architecture, and multi‑column navigation model.
 
 This replaces the earlier minimal TASKS.md. The tasks here are grouped into development phases and subsystems, and they are intended to cover everything needed to build the MVP → Alpha → Beta versions of Project Nexus.
@@ -6,6 +7,7 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 ---
 
 ## Near-Term Focus
+
 - [x] Document audit `ipAddress` filter in API contracts
 - [x] Add Code tab toast for file-save errors (mirror success case)
 - [x] Quiet Code tab hook dependency lint warnings
@@ -16,18 +18,21 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 ---
 
 ## 1. Repository & Core Setup
+
 - [x] Initialize monorepo structure (`apps/frontend`, `apps/backend`, `packages/shared`)
 - [x] Install Next.js (frontend)
 - [x] Install Node/TypeScript backend (Express/Nest/Fastify)
 - [x] Configure database layer (Prisma or Drizzle)
 - [x] Create `.env` templates for model providers
 - [x] Establish Git repo with base project structure
-- [ ] Add Prettier, ESLint, lint-staged, Husky
+- [x] Add Prettier, ESLint, lint-staged, Husky
 
 ---
 
 ## 2. Core Data Model
+
 Implement DB models + TypeScript interfaces:
+
 - [ ] **Project** (name, category, theme, status, activity flags)
 - [ ] **RoadmapList** (title, tags, progress, JS logic ref)
 - [ ] **ChatThread** (title, goal, templateId, status, progress)
@@ -40,19 +45,23 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 3. Backend – API Endpoints
+
 ### 3.1 Project Endpoints
+
 - [ ] GET /projects
 - [ ] POST /projects
 - [ ] PATCH /projects/:id
 - [ ] GET /projects/:id/details
 
 ### 3.2 Roadmap List Endpoints
+
 - [ ] GET /projects/:id/roadmaps
 - [ ] POST /projects/:id/roadmaps
 - [ ] PATCH /roadmaps/:id
 - [ ] GET /roadmaps/:id/meta-chat
 
 ### 3.3 Chat Endpoints
+
 - [ ] GET /roadmaps/:id/chats
 - [ ] POST /roadmaps/:id/chats (empty)
 - [ ] POST /roadmaps/:id/chats/from-template
@@ -61,22 +70,26 @@ Implement DB models + TypeScript interfaces:
 - [ ] POST /chats/:id/messages
 
 ### 3.4 Templates
+
 - [ ] GET /templates
 - [ ] POST /templates
 - [ ] PATCH /templates/:id
 
 ### 3.5 Workspace File API
+
 - [ ] GET /fs/tree
 - [ ] GET /fs/file
 - [ ] POST /fs/write
 - [ ] GET /fs/diff
 
 ### 3.6 Terminal API
+
 - [ ] POST /terminal/sessions
 - [ ] WS /terminal/sessions/:id/stream
 - [ ] POST /terminal/sessions/:id/input
 
 ### 3.7 Authentication & Security
+
 - [ ] POST /auth/login
 - [ ] POST /auth/logout
 - [ ] Session validation middleware
@@ -85,6 +98,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 4. Frontend – Global Infrastructure
+
 - [ ] Three-column layout (Projects | Roadmap Lists | Chats)
 - [ ] Main panel with tabs (Chat / Terminal / Code)
 - [ ] Routing structure:
@@ -97,6 +111,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 5. Column 1 – Projects List
+
 - [ ] List UI (~20 items)
 - [ ] Color-coded activity status
 - [ ] Icons + categories + subtle info line
@@ -108,6 +123,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 6. Column 2 – Roadmap Lists
+
 - [ ] List UI with tags, progress, status color
 - [ ] Subtle summary info
 - [ ] Right-click menu (edit, add chat, open meta-chat)
@@ -117,6 +133,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 7. Column 3 – Chats List
+
 - [ ] Chat items with title, subtle heuristic line, percent
 - [ ] Status colors
 - [ ] Click opens chat view in main panel
@@ -126,7 +143,9 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 8. Main Panel – Chat Tab
+
 ### 8.1 Chat Header
+
 - [ ] Title
 - [ ] AI-generated status line from JSON logic
 - [ ] List of relevant roadmap tasks
@@ -134,6 +153,7 @@ Implement DB models + TypeScript interfaces:
 - [ ] Buttons: Mark Done, Request Status, Open Meta-Chat, Open Folder
 
 ### 8.2 Message Stream
+
 - [ ] User/assistant/system/status/meta styling
 - [ ] Theming per message type
 - [ ] Filters: all/user/AI/status/meta
@@ -141,6 +161,7 @@ Implement DB models + TypeScript interfaces:
 - [ ] Scroll anchoring & smooth streaming
 
 ### 8.3 Composer
+
 - [ ] Multiline input (Enter send, Shift+Enter newline)
 - [ ] Slash commands + autocomplete
 - [ ] Future attach-from-server file dialog (scaffold only)
@@ -148,6 +169,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 9. Main Panel – Terminal Tab
+
 - [ ] Persistent server-side PTY session
 - [ ] Attach/Detach (Play/Stop)
 - [ ] Auto-open setting
@@ -158,6 +180,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 10. Main Panel – Code Tab
+
 - [ ] File tree
 - [ ] Monaco editor (read-only for MVP)
 - [ ] Diff viewer (side-by-side + inline)
@@ -167,6 +190,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 11. Template Engine
+
 - [ ] Template creation UI
 - [ ] Template fields (title, goal, systemPrompt, starterMessages)
 - [ ] JS prompt + JS logic storage
@@ -176,6 +200,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 12. Meta-Chat System
+
 - [ ] One meta-chat per roadmap list
 - [ ] Special layout style in chat list
 - [ ] Ability to run pure JS logic
@@ -186,6 +211,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 13. JSON Status Pipeline
+
 - [ ] Enforce JSON-before-stop protocol for applicable templates
 - [ ] Detect malformed JSON → request reformatted output
 - [ ] Run template’s JS logic to interpret JSON
@@ -195,6 +221,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 14. Git-Backed Storage
+
 - [ ] Directory structure under /projects
 - [ ] Writable workspace folder
 - [ ] Commit creation on snapshot
@@ -205,6 +232,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 15. Theming & Preferences
+
 - [ ] Global theme (auto-detect OS/browser)
 - [ ] Per-project theme override
 - [ ] Per-message-type color rules
@@ -214,6 +242,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 16. Authentication & Security
+
 - [ ] Login screen UI
 - [ ] Password or keyfile auth
 - [ ] Session management
@@ -224,6 +253,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 17. QA, Testing & Stability
+
 - [ ] Unit tests for backend logic
 - [ ] Frontend smoke tests
 - [ ] Load tests for LLM pipeline
@@ -233,6 +263,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 18. Deployment
+
 - [ ] Dockerfiles for backend & frontend
 - [ ] Compose stack for local dev
 - [ ] Deployment templates (Fly.io / Railway / Render)
@@ -242,6 +273,7 @@ Implement DB models + TypeScript interfaces:
 ---
 
 ## 19. Future Expansion (Post-MVP)
+
 - [ ] Multi-agent coordination (architect/reviewer modes)
 - [ ] Real-time collaboration
 - [ ] Semantic search across projects
@@ -252,4 +284,5 @@ Implement DB models + TypeScript interfaces:
 ---
 
 # End of Expanded TASKS
+
 This document is expected to grow and evolve as Project Nexus matures.
