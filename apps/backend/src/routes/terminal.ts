@@ -62,7 +62,7 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const idleEnv = Number(process.env.TERMINAL_IDLE_MS ?? "");
-    const idleTimeoutMs = Number.isFinite(idleEnv) && idleEnv > 0 ? idleEnv : DEFAULT_IDLE_MS;
+    const idleTimeoutMs = Number.isFinite(idleEnv) && idleEnv >= 0 ? idleEnv : DEFAULT_IDLE_MS;
 
     let socketClosed = false;
     let exitLogged = false;

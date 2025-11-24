@@ -174,3 +174,46 @@ test("terminal session is closed after idle timeout and audit includes reason", 
     process.env.TERMINAL_IDLE_MS = originalIdle;
   }
 });
+
+test("idle timeout can be disabled with TERMINAL_IDLE_MS=0", async () => {
+  const { root, restoreEnv } = withTempProjectsRoot();
+  const originalIdle = process.env.TERMINAL_IDLE_MS;
+  process.env.TERMINAL_IDLE_MS = "0";
+  const app = Fastify({ logger: false });
+  await app.register(websocket);
+  await app.register(terminalRoutes);
+  await app.listen({ port: 0, host: "127.0.0.1" });
+
+  const session = createSession("no-idle-user");
+  let terminalSessionId: string | undefined;
+  let socket: InstanceType<typeof WebSocketImpl> | null = null;
+
+  try {
+    const start = await app.inject({
+      method: "POST",
+      url: "/terminal/sessions",
+      headers: { "x-session-token": session.token },
+      payload: { cwd: root },
+    });
+    assert.equal(start.statusCode, 201);
+    terminalSessionId = (start.json() as any).sessionId;
+
+    const url = `ws://127.0.0.1:${getPort(app)}/terminal/sessions/${terminalSessionId}/stream?token=${session.token}`;
+    socket = new WebSocketImpl(url);
+    await new Promise<void>((resolve, reject) => {
+      socket!.onopen = () => resolve();
+      socket!.onerror = (err: unknown) => reject(err);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.ok(getTerminalSession(terminalSessionId!), "session should remain when idle is disabled");
+  } finally {
+    if (socket) socket.close();
+    if (terminalSessionId) closeTerminalSession(terminalSessionId);
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
+    restoreEnv();
+    store.sessions.delete(session.token);
+    process.env.TERMINAL_IDLE_MS = originalIdle;
+  }
+});
