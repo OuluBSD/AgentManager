@@ -126,6 +126,10 @@ For endpoint-level details, see `ARCHITECTURE.md`.
 pnpm install
 pnpm dev:backend   # http://localhost:3001
 pnpm dev:frontend
+# or use the helper (adds pnpm from ~/.local/node_modules/.bin to PATH):
+./run.sh           # starts backend + frontend
+./run.sh backend   # backend only
+./run.sh frontend  # frontend only
 ```
 
 > Heads-up: `pnpm` is installed locally at `~/.local/node_modules/.bin/pnpm`. If your shell cannot find it, run  
