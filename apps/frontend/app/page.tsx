@@ -10,6 +10,7 @@ import {
   fetchProjects,
   fetchRoadmapStatus,
   fetchRoadmaps,
+  fetchFileDiff,
   login,
   fetchAuditEvents,
   sendTerminalInput,
@@ -144,6 +145,12 @@ export default function Page() {
   const [fsContent, setFsContent] = useState<string>("");
   const [fsLoading, setFsLoading] = useState(false);
   const [fsError, setFsError] = useState<string | null>(null);
+  const [fsDiff, setFsDiff] = useState<string>("");
+  const [fsDiffError, setFsDiffError] = useState<string | null>(null);
+  const [fsDiffLoading, setFsDiffLoading] = useState(false);
+  const [fsDiffLoaded, setFsDiffLoaded] = useState(false);
+  const [fsBaseSha, setFsBaseSha] = useState<string>("");
+  const [fsTargetSha, setFsTargetSha] = useState<string>("HEAD");
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditFilters, setAuditFilters] = useState<{ eventType: string; userId: string; pathContains: string }>({
     eventType: "",
@@ -195,6 +202,12 @@ export default function Page() {
     setFsContent("");
     setFsContentPath(null);
     setFsPath(".");
+    setFsDiff("");
+    setFsDiffError(null);
+    setFsDiffLoaded(false);
+    setFsDiffLoading(false);
+    setFsBaseSha("");
+    setFsTargetSha("HEAD");
   };
 
   const loadChatsForRoadmap = async (
@@ -465,6 +478,12 @@ export default function Page() {
     const targetPath = pathOverride ?? fsPath ?? ".";
     setFsLoading(true);
     setFsError(null);
+    setFsDiff("");
+    setFsDiffError(null);
+    setFsDiffLoaded(false);
+    setFsDiffLoading(false);
+    setFsContent("");
+    setFsContentPath(null);
     try {
       const tree = await fetchFileTree(sessionToken, selectedProjectId, targetPath);
       setFsEntries(tree.entries);
@@ -484,6 +503,10 @@ export default function Page() {
     }
     setFsLoading(true);
     setFsError(null);
+    setFsDiff("");
+    setFsDiffError(null);
+    setFsDiffLoaded(false);
+    setFsDiffLoading(false);
     try {
       const file = await fetchFileContent(sessionToken, selectedProjectId, path);
       setFsContentPath(file.path);
@@ -518,6 +541,34 @@ export default function Page() {
     loadFsTree(parent);
   };
 
+  const loadFsDiff = async () => {
+    if (!sessionToken || !selectedProjectId || !fsContentPath) {
+      setFsDiffError("Open a file to view git diff (login required).");
+      return;
+    }
+    setFsDiffLoading(true);
+    setFsDiffError(null);
+    setFsDiff("");
+    setFsDiffLoaded(false);
+    try {
+      const diff = await fetchFileDiff(
+        sessionToken,
+        selectedProjectId,
+        fsContentPath,
+        fsBaseSha.trim() || undefined,
+        fsTargetSha.trim() || undefined
+      );
+      setFsDiff(diff.diff ?? "");
+      setFsDiffLoaded(true);
+    } catch (err) {
+      setFsDiffError(err instanceof Error ? err.message : "Failed to load diff");
+      setFsDiff("");
+      setFsDiffLoaded(false);
+    } finally {
+      setFsDiffLoading(false);
+    }
+  };
+
   useEffect(() => {
     return () => {
       if (terminalSocket.current) {
@@ -531,6 +582,12 @@ export default function Page() {
     setFsContent("");
     setFsContentPath(null);
     setFsPath(".");
+    setFsDiff("");
+    setFsDiffError(null);
+    setFsDiffLoaded(false);
+    setFsDiffLoading(false);
+    setFsBaseSha("");
+    setFsTargetSha("HEAD");
     if (sessionToken && selectedProjectId) {
       loadFsTree(".");
     }
@@ -667,12 +724,55 @@ export default function Page() {
               {fsLoading && <span className="item-subtle">Loading…</span>}
             </div>
             {fsContentPath && (
-              <div className="panel-mono" style={{ maxHeight: 320, overflow: "auto", whiteSpace: "pre" }}>
-                <div className="item-subtle" style={{ marginBottom: 6 }}>
-                  {fsContentPath}
+              <>
+                <div className="panel-mono" style={{ maxHeight: 320, overflow: "auto", whiteSpace: "pre" }}>
+                  <div className="item-subtle" style={{ marginBottom: 6 }}>
+                    {fsContentPath}
+                  </div>
+                  {fsContent}
                 </div>
-                {fsContent}
-              </div>
+                <div className="login-row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  <input
+                    className="filter"
+                    placeholder="Base SHA (optional)"
+                    value={fsBaseSha}
+                    onChange={(e) => setFsBaseSha(e.target.value)}
+                    style={{ minWidth: 160 }}
+                  />
+                  <input
+                    className="filter"
+                    placeholder="Target (default HEAD)"
+                    value={fsTargetSha}
+                    onChange={(e) => setFsTargetSha(e.target.value)}
+                    style={{ minWidth: 140 }}
+                  />
+                  <button className="tab" onClick={loadFsDiff} disabled={fsDiffLoading || fsLoading}>
+                    {fsDiffLoading ? "Loading…" : "View Diff"}
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={() => {
+                      setFsDiff("");
+                      setFsDiffError(null);
+                      setFsDiffLoaded(false);
+                    }}
+                    disabled={!fsDiff && !fsDiffError && !fsDiffLoaded}
+                  >
+                    Clear
+                  </button>
+                </div>
+                {fsDiffError && <div className="item-subtle" style={{ color: "#EF4444" }}>{fsDiffError}</div>}
+                {(fsDiffLoaded || fsDiff) && (
+                  <div className="panel-mono" style={{ maxHeight: 320, overflow: "auto", whiteSpace: "pre" }}>
+                    <div className="item-subtle" style={{ marginBottom: 6 }}>
+                      Diff for {fsContentPath}{" "}
+                      {fsBaseSha.trim() ? `from ${fsBaseSha.trim()}` : "(working tree)"}{" "}
+                      {fsTargetSha.trim() ? `→ ${fsTargetSha.trim()}` : ""}
+                    </div>
+                    {fsDiff || "No changes."}
+                  </div>
+                )}
+              </>
             )}
           </div>
         );

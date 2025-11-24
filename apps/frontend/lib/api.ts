@@ -74,6 +74,22 @@ export async function fetchFileContent(
   );
 }
 
+export async function fetchFileDiff(
+  token: string,
+  projectId: string,
+  path: string,
+  baseSha?: string | null,
+  targetSha?: string | null
+): Promise<{ path: string; diff: string }> {
+  const params = new URLSearchParams({
+    projectId,
+    path,
+  });
+  if (baseSha) params.set("baseSha", baseSha);
+  if (targetSha) params.set("targetSha", targetSha);
+  return fetchWithAuth(token, `/api/fs/diff?${params.toString()}`);
+}
+
 export async function createTerminalSession(
   token: string,
   projectId?: string,
