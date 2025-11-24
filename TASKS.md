@@ -153,16 +153,17 @@ Implement DB models + TypeScript interfaces:
 ### 8.1 Chat Header
 
 - [x] Title
-- [ ] AI-generated status line from JSON logic
-- [ ] List of relevant roadmap tasks
-- [ ] Link to template
-- [ ] Buttons: Mark Done, Request Status, Open Meta-Chat, Open Folder
+- [x] AI-generated status line from JSON logic
+- [x] List of relevant roadmap tasks
+- [x] Link to template
+- [x] Buttons: Mark Done / Request Status / Open Meta-Chat
+- [ ] Button: Open Folder
 
 ### 8.2 Message Stream
 
 - [x] User/assistant/system/status/meta styling
 - [x] Theming per message type
-- [ ] Filters: all/user/AI/status/meta
+- [x] Filters: all/user/AI/status/meta
 - [ ] Previous/next user message navigation
 - [ ] Scroll anchoring & smooth streaming
 
