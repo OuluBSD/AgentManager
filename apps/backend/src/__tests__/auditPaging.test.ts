@@ -16,7 +16,9 @@ type AuditRow = {
 };
 
 class FakeBuilder {
-  private limitValue: number | undefined;
+  public limitValue: number | undefined;
+  public whereClause: unknown;
+  public orderings: unknown[] = [];
 
   constructor(private readonly rows: AuditRow[]) {}
 
@@ -28,7 +30,8 @@ class FakeBuilder {
     return this;
   }
 
-  orderBy() {
+  orderBy(...orderings: unknown[]) {
+    this.orderings = orderings;
     return this;
   }
 
@@ -37,7 +40,8 @@ class FakeBuilder {
     return this;
   }
 
-  where() {
+  where(clause: unknown) {
+    this.whereClause = clause;
     return this;
   }
 
@@ -52,11 +56,34 @@ class FakeBuilder {
 }
 
 class FakeDb {
+  public lastBuilder: FakeBuilder | undefined;
+
   constructor(private readonly rows: AuditRow[]) {}
 
   select() {
-    return new FakeBuilder(this.rows);
+    this.lastBuilder = new FakeBuilder(this.rows);
+    return this.lastBuilder;
   }
+}
+
+function flattenSql(input: unknown): string {
+  if (!input) return "";
+  if (typeof input === "string" || typeof input === "number" || typeof input === "boolean") {
+    return String(input);
+  }
+  if (Array.isArray(input)) {
+    return input.map(flattenSql).join("");
+  }
+  if (typeof input === "object" && "queryChunks" in (input as Record<string, unknown>)) {
+    return ((input as { queryChunks: unknown[] }).queryChunks ?? []).map(flattenSql).join("");
+  }
+  if (typeof input === "object" && "value" in (input as Record<string, unknown>)) {
+    return flattenSql((input as { value: unknown }).value);
+  }
+  if (typeof input === "object" && "name" in (input as Record<string, unknown>)) {
+    return flattenSql((input as { name: unknown }).name);
+  }
+  return "";
 }
 
 afterEach(() => {
@@ -111,5 +138,61 @@ test("uses trimmed rows for cursor and hasMore when more data exists", async () 
   assert.equal(payload.events.length, 2);
   assert.equal(payload.paging.hasMore, true);
   assert.equal(payload.paging.nextCursor, `${rows[1].createdAt.toISOString()}|${rows[1].id}`);
+  await app.close();
+});
+
+test("builds filter clauses for project, type, user, and path", async () => {
+  const rows: AuditRow[] = [
+    { id: "a", eventType: "fs:read", createdAt: new Date("2024-01-01T00:00:00Z"), projectId: "proj-1", userId: "u1", path: "/a.txt" },
+    { id: "b", eventType: "fs:write", createdAt: new Date("2024-01-01T00:00:01Z"), projectId: "proj-2", userId: "u2", path: "/b.txt" },
+  ];
+  const app = Fastify({ logger: false }) as FastifyInstance & { db: FakeDb };
+  app.db = new FakeDb(rows);
+  await app.register(auditRoutes);
+  await app.ready();
+
+  const session = createSession("audit-user");
+  const res = await app.inject({
+    method: "GET",
+    url: "/audit/events?projectId=proj-1&eventType=fs:read&userId=u1&pathContains=.txt",
+    headers: { "x-session-token": session.token },
+  });
+
+  assert.equal(res.statusCode, 200);
+  const whereText = flattenSql(app.db.lastBuilder?.whereClause);
+  assert.ok(whereText.includes("project_id"));
+  assert.ok(whereText.includes("proj-1"));
+  assert.ok(whereText.includes("event_type"));
+  assert.ok(whereText.includes("fs:read"));
+  assert.ok(whereText.includes("user_id"));
+  assert.ok(whereText.includes("u1"));
+  assert.ok(whereText.toLowerCase().includes("like"));
+  assert.ok(whereText.includes(".txt"));
+  await app.close();
+});
+
+test("uses ascending order when sort=asc is supplied", async () => {
+  const rows: AuditRow[] = [
+    { id: "a", eventType: "fs:read", createdAt: new Date("2024-01-01T00:00:00Z") },
+  ];
+  const app = Fastify({ logger: false }) as FastifyInstance & { db: FakeDb };
+  app.db = new FakeDb(rows);
+  await app.register(auditRoutes);
+  await app.ready();
+
+  const session = createSession("audit-user");
+  const res = await app.inject({
+    method: "GET",
+    url: "/audit/events?sort=asc",
+    headers: { "x-session-token": session.token },
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(app.db.lastBuilder?.orderings.length, 2);
+  const [createdOrder, idOrder] = app.db.lastBuilder?.orderings ?? [];
+  const createdOrderText = flattenSql(createdOrder);
+  const idOrderText = flattenSql(idOrder);
+  assert.ok(createdOrderText.toLowerCase().includes("asc"));
+  assert.ok(idOrderText.toLowerCase().includes("asc"));
   await app.close();
 });
