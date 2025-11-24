@@ -14,8 +14,8 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 - [x] Add Code tab toasts for file load/diff failures
 - [x] Remove Code tab hook dependency lint suppressions via stable callbacks
 - [x] Run full backend/frontend test suites after recent changes (backend tests + frontend lint/build passing)
-- [ ] Implement initial DB models for Project/RoadmapList/ChatThread/Message
-- [ ] Scaffold Projects API (list/create/update) to unblock UI wiring
+- [x] Implement initial DB models for Project/RoadmapList/ChatThread/Message
+- [x] Scaffold Projects API (list/create/update) to unblock UI wiring
 
 ---
 
