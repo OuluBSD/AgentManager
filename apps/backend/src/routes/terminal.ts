@@ -1,5 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
-import { createTerminalSession, getTerminalSession, sendInput } from "../services/terminalManager";
+import {
+  closeTerminalSession,
+  createTerminalSession,
+  getTerminalSession,
+  sendInput,
+} from "../services/terminalManager";
 import { requireSession, validateToken } from "../utils/auth";
 import { findProject } from "../utils/projects";
 import { recordAuditEvent } from "../services/auditLogger";
@@ -54,11 +59,34 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    const handleStdout = (chunk: Buffer) => connection.socket.send(chunk);
-    const handleStderr = (chunk: Buffer) => connection.socket.send(chunk);
-    const handleExit = (code: number | null) => {
-      connection.socket.send(`\n[process exited with code ${code ?? "0"}]\n`);
-      connection.socket.close();
+    let socketClosed = false;
+    let exitLogged = false;
+
+    const handleStdout = (chunk: Buffer) => {
+      if (connection.socket.readyState === connection.socket.OPEN) {
+        connection.socket.send(chunk);
+      }
+    };
+    const handleStderr = (chunk: Buffer) => {
+      if (connection.socket.readyState === connection.socket.OPEN) {
+        connection.socket.send(chunk);
+      }
+    };
+    const handleExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (!exitLogged) {
+        exitLogged = true;
+        recordAuditEvent(fastify, {
+          userId: session.userId,
+          projectId: managed.projectId ?? null,
+          eventType: "terminal:exit",
+          sessionId: managed.id,
+          metadata: { code: code ?? 0, signal: signal ?? null, ip: request.ip },
+        }).catch((err) => fastify.log.error({ err }, "Failed to record terminal exit"));
+      }
+      if (!socketClosed && connection.socket.readyState === connection.socket.OPEN) {
+        connection.socket.send(`\n[process exited with code ${code ?? "0"}]\n`);
+        connection.socket.close();
+      }
     };
 
     managed.proc.stdout.on("data", handleStdout);
@@ -71,9 +99,17 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     connection.socket.on("close", () => {
+      socketClosed = true;
       managed.proc.stdout.off("data", handleStdout);
       managed.proc.stderr.off("data", handleStderr);
-      managed.proc.off("exit", handleExit);
+      closeTerminalSession(params.sessionId);
+    });
+
+    connection.socket.on("error", () => {
+      socketClosed = true;
+      managed.proc.stdout.off("data", handleStdout);
+      managed.proc.stderr.off("data", handleStderr);
+      closeTerminalSession(params.sessionId);
     });
 
     connection.socket.send("terminal stream ready");
