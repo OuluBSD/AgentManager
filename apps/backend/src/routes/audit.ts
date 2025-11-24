@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, lt, or, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, lt, or, type SQL } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import * as schema from "@nexus/shared/db/schema";
 import { requireSession } from "../utils/auth";
@@ -19,12 +19,14 @@ export const auditRoutes: FastifyPluginAsync = async (fastify) => {
       eventType?: string;
       userId?: string;
       pathContains?: string;
+      sort?: "asc" | "desc";
     };
     const limit = Math.min(Number(query.limit ?? 50) || 50, 200);
     const beforeDate = query.before ? new Date(query.before) : null;
     const cursorParts = query.cursor?.split("|");
     const cursorDate = cursorParts?.[0] ? new Date(cursorParts[0]) : null;
     const cursorId = cursorParts?.[1];
+    const orderDirection = query.sort === "asc" ? "asc" : "desc";
 
     let builder = fastify.db
       .select({
@@ -38,7 +40,12 @@ export const auditRoutes: FastifyPluginAsync = async (fastify) => {
         createdAt: schema.auditEvents.createdAt,
       })
       .from(schema.auditEvents)
-      .orderBy(desc(schema.auditEvents.createdAt), desc(schema.auditEvents.id))
+      .orderBy(
+        orderDirection === "asc"
+          ? asc(schema.auditEvents.createdAt)
+          : desc(schema.auditEvents.createdAt),
+        orderDirection === "asc" ? asc(schema.auditEvents.id) : desc(schema.auditEvents.id)
+      )
       .limit(limit);
 
     const whereClauses: SQL[] = [];
@@ -55,12 +62,13 @@ export const auditRoutes: FastifyPluginAsync = async (fastify) => {
       whereClauses.push(ilike(schema.auditEvents.path, `%${query.pathContains}%`));
     }
     if (beforeDate && !Number.isNaN(beforeDate.getTime())) {
-      whereClauses.push(lt(schema.auditEvents.createdAt, beforeDate));
+      whereClauses.push(orderDirection === "asc" ? lt(schema.auditEvents.createdAt, beforeDate) : lt(schema.auditEvents.createdAt, beforeDate));
     } else if (cursorDate && cursorId && !Number.isNaN(cursorDate.getTime())) {
+      const comparison = orderDirection === "asc" ? gt : lt;
       whereClauses.push(
         or(
-          lt(schema.auditEvents.createdAt, cursorDate),
-          and(eq(schema.auditEvents.createdAt, cursorDate), lt(schema.auditEvents.id, cursorId))
+          comparison(schema.auditEvents.createdAt, cursorDate),
+          and(eq(schema.auditEvents.createdAt, cursorDate), comparison(schema.auditEvents.id, cursorId))
         )
       );
     }

@@ -124,7 +124,8 @@ export async function fetchAuditEvents(
   limit = 50,
   before?: string,
   cursor?: string,
-  filters?: { eventType?: string; userId?: string; pathContains?: string }
+  filters?: { eventType?: string; userId?: string; pathContains?: string },
+  sort: "asc" | "desc" = "desc"
 ): Promise<{
   events: {
     id: string;
@@ -134,6 +135,7 @@ export async function fetchAuditEvents(
     sessionId?: string | null;
     userId?: string | null;
     projectId?: string | null;
+    metadata?: Record<string, unknown> | null;
   }[];
   paging?: { hasMore: boolean; nextCursor?: string };
 }> {
@@ -145,5 +147,6 @@ export async function fetchAuditEvents(
   if (filters?.eventType) params.set("eventType", filters.eventType);
   if (filters?.userId) params.set("userId", filters.userId);
   if (filters?.pathContains) params.set("pathContains", filters.pathContains);
+  if (sort) params.set("sort", sort);
   return fetchWithAuth(token, `/api/audit/events?${params.toString()}`);
 }

@@ -41,6 +41,7 @@ type AuditEvent = {
   sessionId?: string | null;
   userId?: string | null;
   projectId?: string | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 const mockProjects: ProjectItem[] = [
@@ -113,6 +114,8 @@ export default function Page() {
     userId: "",
     pathContains: "",
   });
+  const [auditProjectId, setAuditProjectId] = useState<string>("");
+  const [auditSort, setAuditSort] = useState<"asc" | "desc">("desc");
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditCursor, setAuditCursor] = useState<string | null>(null);
   const [auditHasMore, setAuditHasMore] = useState(false);
@@ -515,7 +518,15 @@ export default function Page() {
     }
     setAuditLoading(true);
     try {
-      const { events, paging } = await fetchAuditEvents(sessionToken, projectId, 50, undefined, cursor, filters);
+      const { events, paging } = await fetchAuditEvents(
+        sessionToken,
+        projectId,
+        50,
+        undefined,
+        cursor,
+        filters,
+        auditSort
+      );
       setAuditEvents((prev) => (options?.reset ? events : [...prev, ...events]));
       setAuditCursor(paging?.nextCursor ?? null);
       setAuditHasMore(Boolean(paging?.hasMore));
@@ -534,13 +545,19 @@ export default function Page() {
 
   useEffect(() => {
     if (sessionToken) {
-      loadAuditLog(selectedProjectId ?? undefined, { reset: true });
+      loadAuditLog(auditProjectId || selectedProjectId || undefined, { reset: true });
     } else {
       setAuditEvents([]);
       setAuditCursor(null);
       setAuditHasMore(false);
     }
-  }, [sessionToken, selectedProjectId]);
+  }, [sessionToken, selectedProjectId, auditProjectId, auditSort]);
+
+  useEffect(() => {
+    if (selectedProjectId && !auditProjectId) {
+      setAuditProjectId(selectedProjectId);
+    }
+  }, [selectedProjectId, auditProjectId]);
 
   const tabBody = (() => {
     switch (activeTab) {
@@ -764,6 +781,20 @@ export default function Page() {
         <div className="login-row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
           <select
             className="filter"
+            value={auditProjectId}
+            onChange={(e) => setAuditProjectId(e.target.value)}
+          >
+            <option value="">All projects</option>
+            {projects
+              .filter((p) => p.id)
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+          </select>
+          <select
+            className="filter"
             value={auditFilters.eventType}
             onChange={(e) => setAuditFilters((prev) => ({ ...prev, eventType: e.target.value }))}
           >
@@ -787,9 +818,20 @@ export default function Page() {
             onChange={(e) => setAuditFilters((prev) => ({ ...prev, pathContains: e.target.value }))}
             style={{ flex: 1, minWidth: 160 }}
           />
+          <select
+            className="filter"
+            value={auditSort}
+            onChange={(e) => {
+              const value = e.target.value === "asc" ? "asc" : "desc";
+              setAuditSort(value);
+            }}
+          >
+            <option value="desc">Newest first</option>
+            <option value="asc">Oldest first</option>
+          </select>
           <button
             className="tab"
-            onClick={() => loadAuditLog(selectedProjectId ?? undefined, { reset: true })}
+            onClick={() => loadAuditLog(auditProjectId || undefined, { reset: true })}
             disabled={auditLoading}
           >
             Apply filters
@@ -799,7 +841,7 @@ export default function Page() {
             onClick={() => {
               const cleared = { eventType: "", userId: "", pathContains: "" };
               setAuditFilters(cleared);
-              loadAuditLog(selectedProjectId ?? undefined, { reset: true, filtersOverride: cleared });
+              loadAuditLog(auditProjectId || undefined, { reset: true, filtersOverride: cleared });
             }}
             disabled={auditLoading}
           >
@@ -809,14 +851,14 @@ export default function Page() {
         <div className="login-row" style={{ gap: 8, marginBottom: 8 }}>
           <button
             className="tab"
-            onClick={() => loadAuditLog(selectedProjectId ?? undefined, { reset: true })}
+            onClick={() => loadAuditLog(auditProjectId || undefined, { reset: true })}
             disabled={auditLoading}
           >
             {auditLoading ? "Loading…" : "Refresh"}
           </button>
           <button
             className="ghost"
-            onClick={() => loadAuditLog(selectedProjectId ?? undefined)}
+            onClick={() => loadAuditLog(auditProjectId || undefined)}
             disabled={!auditHasMore || auditLoading}
           >
             {auditLoading ? "Loading…" : auditHasMore ? "Load more" : "No more events"}
@@ -837,6 +879,15 @@ export default function Page() {
               <div className="item-subtle">
                 user {event.userId ?? "—"} · session {event.sessionId ?? "—"} · project {event.projectId ?? "—"}
               </div>
+              {event.metadata && (() => {
+                const metaText = JSON.stringify(event.metadata);
+                return (
+                  <div className="item-subtle">
+                    meta {metaText.slice(0, 160)}
+                    {metaText.length > 160 ? "…" : ""}
+                  </div>
+                );
+              })()}
             </div>
           ))}
           {auditLoading && <div className="item-subtle">Loading…</div>}
