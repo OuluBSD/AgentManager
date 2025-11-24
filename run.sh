@@ -12,6 +12,15 @@ if [ -f "$ROOT/.env" ]; then
   set +a
 fi
 
+# Terminal streams close after 10 minutes idle by default. Override or disable (0) here.
+DEFAULT_TERMINAL_IDLE_MS=600000
+if [ -z "${TERMINAL_IDLE_MS:-}" ]; then
+  export TERMINAL_IDLE_MS=$DEFAULT_TERMINAL_IDLE_MS
+else
+  export TERMINAL_IDLE_MS
+fi
+echo "TERMINAL_IDLE_MS=${TERMINAL_IDLE_MS} (set to 0 to disable idle shutdowns)"
+
 backend_cmd=(pnpm --filter nexus-backend dev)
 frontend_cmd=(pnpm --filter nexus-frontend dev)
 

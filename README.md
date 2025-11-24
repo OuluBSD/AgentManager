@@ -157,6 +157,9 @@ Database:
 - Generate migrations from the shared schema: `pnpm exec drizzle-kit generate` (writes to `packages/shared/db/migrations`).
 - Apply migrations with your preferred tool (e.g., `drizzle-kit push` or `psql`).
 
+Terminal idle timeout:
+- WebSocket terminal streams close after 10 minutes idle by default. Set `TERMINAL_IDLE_MS` (ms) in your shell or `.env` to change it; `0` disables the idle shutdown. `run.sh` echoes the value it will use.
+
 Auth:
 - When the database is enabled, `/auth/login` will create a user on first login; the first provided password becomes the stored hash.
 - If a user already has a password set, a password is required for login; otherwise the route rejects with 401.
