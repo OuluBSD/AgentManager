@@ -169,3 +169,13 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     reply.code(204).send();
   });
 };
+
+export const loginThrottleState = {
+  attempts: loginAttempts,
+  loginAttemptKey,
+  recordFailure,
+  isBlocked,
+  maxFailures: LOGIN_MAX_FAILURES,
+  windowMs: LOGIN_WINDOW_MS,
+  blockMs: LOGIN_BLOCK_MS,
+};
