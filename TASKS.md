@@ -122,9 +122,9 @@ Implement DB models + TypeScript interfaces:
 
 ## 5. Column 1 – Projects List
 
-- [ ] List UI (~20 items)
-- [ ] Color-coded activity status
-- [ ] Icons + categories + subtle info line
+- [x] List UI (~20 items)
+- [x] Color-coded activity status
+- [x] Icons + categories + subtle info line
 - [x] Quick filter (text)
 - [x] Grouping by category
 - [x] Right-click menu (edit, settings, favorite templates)
@@ -135,7 +135,7 @@ Implement DB models + TypeScript interfaces:
 
 ## 6. Column 2 – Roadmap Lists
 
-- [ ] List UI with tags, progress, status color
+- [x] List UI with tags, progress, status color
 - [x] Quick filter (title/tags)
 - [x] Subtle summary info
 - [x] Right-click menu (edit, add chat, open meta-chat)
@@ -280,6 +280,7 @@ Implement DB models + TypeScript interfaces:
 - Added auto-scroll behavior to chat stream that maintains bottom position when new messages arrive, only if user is near bottom (within 100px).
 - Fixed pre-existing TypeScript errors where `project.status` and `roadmap.status` strings needed type assertions for `formatStatusLabel`.
 - Added `templateId` field to Playwright test data to satisfy type requirements in route helpers.
+- Verified that Projects and Roadmaps columns already have complete UI polish: color-coded status dots, category/tag pills, progress percentages, summary info, and grouping. Marked these items as complete in TASKS.md sections 5 and 6.
 
 ---
 
