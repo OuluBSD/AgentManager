@@ -271,6 +271,8 @@ Implement DB models + TypeScript interfaces:
 - Added a Playwright regression (`apps/frontend/tests/playwright/merge-prompt.spec.ts`) that exercises the chat merge prompt, keeps the whitespace/case guidance message visible, and asserts that the trimmed target is sent to the backend stub.
 - Deferred the chat rename/merge prompts via a short timeout and stopped context-menu `mousedown` propagation so the client still opens `window.prompt` after the click completes, letting Playwright pick up the dialog reliably.
 - Re-ran `pnpm --filter nexus-frontend e2e` to validate `merge-prompt.spec.ts` after unlocking the prompt flow.
+- Added shared Playwright fixtures/route helper so merge and rename tests reuse the same stubbed backend responses.
+- Created `rename-prompt.spec.ts` to ensure the rename prompt trims input and updates the chat label after accepting whitespace-heavy titles.
 
 ---
 
