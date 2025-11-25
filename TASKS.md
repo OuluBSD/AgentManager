@@ -267,6 +267,8 @@ Implement DB models + TypeScript interfaces:
 - Added an authenticated `/api/auth/session` endpoint (covered in API docs) and new tests so clients can confirm a live token and user match.
 - Validated that `findChatForMerge` tolerates trimmed identifiers and case-insensitive titles by running `pnpm --filter nexus-backend test`, satisfying the merge target QA step.
 - Added an integration test for the chat merge API to ensure trimmed/case-insensitive identifiers succeed and re-ran `pnpm --filter nexus-backend test`.
+- Manually exercised the frontend merge context-menu prompt using identifiers/titles with extra whitespace and casing differences to confirm the UX message matches the backend tolerance.
+- Planning a lightweight UI/Playwright regression that clicks the merge action and enters those variations so we keep this flow covered automatically.
 
 ---
 
@@ -288,6 +290,7 @@ Implement DB models + TypeScript interfaces:
 - [ ] Load tests for LLM pipeline
 - [ ] Terminal stability checks under heavy load
 - [ ] JSON-status conformance tests
+- [ ] Playwright or similar UI regression for the chat merge prompt to guard whitespace/case-tolerant targets
 
 ---
 
