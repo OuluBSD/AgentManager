@@ -322,6 +322,74 @@ test("chat merge endpoint moves messages and removes the source chat", async () 
   }
 });
 
+test("chat merge endpoint tolerates trimmed identifiers and case-insensitive titles", async () => {
+  const { client, db } = await buildDb();
+  const app = makeApp(db);
+  await app.register(roadmapRoutes);
+  await app.register(chatRoutes);
+  await app.ready();
+
+  const session = createSession("db-chats-merge-trim");
+
+  try {
+    const [project] = await db
+      .insert(schema.projects)
+      .values({ name: "Trim Merge Host" })
+      .returning();
+    const roadmapRes = await app.inject({
+      method: "POST",
+      url: `/projects/${project.id}/roadmaps`,
+      headers: { "x-session-token": session.token },
+      payload: { title: "Trim Merge Roadmap" },
+    });
+    assert.equal(roadmapRes.statusCode, 201);
+    const roadmap = roadmapRes.json() as { id: string };
+
+    const createSource = await app.inject({
+      method: "POST",
+      url: `/roadmaps/${roadmap.id}/chats`,
+      headers: { "x-session-token": session.token },
+      payload: { title: "Source Trim", progress: 0.1, status: "waiting" },
+    });
+    assert.equal(createSource.statusCode, 201);
+    const sourceChatId = (createSource.json() as { id: string }).id;
+
+    const createTarget = await app.inject({
+      method: "POST",
+      url: `/roadmaps/${roadmap.id}/chats`,
+      headers: { "x-session-token": session.token },
+      payload: { title: "Case Sensitive Target", progress: 0.6, status: "in_progress" },
+    });
+    assert.equal(createTarget.statusCode, 201);
+    const targetChatId = (createTarget.json() as { id: string }).id;
+
+    const mergeRes = await app.inject({
+      method: "POST",
+      url: `/chats/${sourceChatId}/merge`,
+      headers: { "x-session-token": session.token },
+      payload: { targetIdentifier: "   cAsE sEnSiTiVe tArGeT   " },
+    });
+    assert.equal(mergeRes.statusCode, 200);
+    const mergedPayload = mergeRes.json() as {
+      target: { id: string; title: string; progress: number };
+      removedChatId: string;
+    };
+    assert.equal(mergedPayload.removedChatId, sourceChatId);
+    assert.equal(mergedPayload.target.id, targetChatId);
+    assert.equal(mergedPayload.target.title, "Case Sensitive Target");
+
+    const [sourceRow] = await db
+      .select()
+      .from(schema.chats)
+      .where(eq(schema.chats.id, sourceChatId));
+    assert.equal(sourceRow, undefined);
+  } finally {
+    await app.close();
+    await client.close();
+    store.sessions.delete(session.token);
+  }
+});
+
 test("dbFindChatForMerge tolerates trimmed identifiers and case-insensitive titles", async () => {
   const { client, db } = await buildDb();
   try {
