@@ -152,7 +152,7 @@ Implement DB models + TypeScript interfaces:
 - [x] Status colors
 - [x] Click opens chat view in main panel
 - [x] **Meta-chat appears at top**, visually separated
-- [ ] Right-click context menu (rename, open folder, merge)
+- [x] Right-click context menu (rename, open folder, merge)
 
 ---
 
