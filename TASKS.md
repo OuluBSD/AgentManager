@@ -249,6 +249,11 @@ Implement DB models + TypeScript interfaces:
 - [ ] Minimal vs. expanded detail modes
 - [ ] Sidebar animation toggles
 
+## Recent Notes
+
+- Documented the audit `ipAddress` filter semantics in `API_CONTRACTS.md` so it is clear how to scope queries by IP.
+- Ensured the Code tab now surfaces save failures with toast messaging that mirrors the detail shown for successful writes.
+
 ---
 
 ## 16. Authentication & Security

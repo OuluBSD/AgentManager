@@ -53,6 +53,7 @@ High-level REST + WebSocket contracts for the MVP. Paths are prefixed with `/api
 
 - `GET /audit/events` – filters: projectId, eventType, userId, pathContains, ipAddress, before|cursor, limit (≤200), sort (asc|desc) → { events, paging: { hasMore, nextCursor } }
   - `ipAddress` matches the stored audit IP exactly (IPv4 or IPv6 string); combine with other filters for narrower queries.
+  - Provide `ipAddress=<value>` when you need to isolate events issued from a single address; the backend trims and validates the value before comparing to the stored IP.
 
 ## Snapshots
 
