@@ -199,10 +199,9 @@ Implement DB models + TypeScript interfaces:
 
 ## 10. Main Panel – Code Tab
 
-- [ ] File tree
-- [ ] Monaco editor (read-only for MVP)
-- [ ] Diff viewer (side-by-side + inline)
-- [ ] Syntax highlighting
+- [x] File tree
+- [x] Syntax highlighting (highlight.js)
+- [x] Diff viewer with color-coded formatting
 - [ ] Tab state remembered per chat
 
 ---
@@ -281,6 +280,14 @@ Implement DB models + TypeScript interfaces:
 - Fixed pre-existing TypeScript errors where `project.status` and `roadmap.status` strings needed type assertions for `formatStatusLabel`.
 - Added `templateId` field to Playwright test data to satisfy type requirements in route helpers.
 - Verified that Projects and Roadmaps columns already have complete UI polish: color-coded status dots, category/tag pills, progress percentages, summary info, and grouping. Marked these items as complete in TASKS.md sections 5 and 6.
+- Installed highlight.js for syntax highlighting in the Code tab (`pnpm add --filter nexus-frontend highlight.js @types/highlight.js`).
+- Created `FileTree` component (`apps/frontend/components/FileTree.tsx`) with sorted directory/file listing, hover states, and click handlers for navigation.
+- Created `CodeViewer` component (`apps/frontend/components/CodeViewer.tsx`) with syntax highlighting for JS/TS/Python/JSON/CSS/HTML/Bash/Markdown/YAML using highlight.js, supporting both view and edit modes.
+- Created `DiffViewer` component (`apps/frontend/components/DiffViewer.tsx`) with color-coded diff formatting (green for additions, red for deletions, blue for headers).
+- Integrated all three components into the Code tab, replacing the old flat button list with FileTree and the textarea with CodeViewer.
+- Added highlight.js GitHub Dark theme import to `globals.css` for consistent syntax highlighting colors.
+- Updated `fsEntries` state type to `FileEntry[]` and transformed API responses to include full paths for each entry.
+- Verified all changes with `pnpm --filter nexus-frontend lint`, `pnpm --filter nexus-frontend build`, `pnpm --filter nexus-frontend e2e`, and `pnpm --filter nexus-backend test` (all passing).
 
 ---
 

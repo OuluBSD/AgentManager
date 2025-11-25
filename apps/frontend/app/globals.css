@@ -473,3 +473,6 @@ body {
     min-height: auto;
   }
 }
+
+/* Highlight.js GitHub Dark theme for code syntax highlighting */
+@import "highlight.js/styles/github-dark.css";

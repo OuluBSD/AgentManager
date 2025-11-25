@@ -34,6 +34,9 @@ import {
 } from "../../lib/api";
 import { TemplatePanel } from "../../components/TemplatePanel";
 import { useMessageNavigation } from "../../components/MessageNavigation";
+import { FileTree, type FileEntry } from "../../components/FileTree";
+import { CodeViewer } from "../../components/CodeViewer";
+import { DiffViewer } from "../../components/DiffViewer";
 
 type Status =
   | "inactive"
@@ -489,7 +492,7 @@ export default function Page() {
   const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
   const terminalSocket = useRef<WebSocket | null>(null);
   const [fsPath, setFsPath] = useState<string>(".");
-  const [fsEntries, setFsEntries] = useState<{ type: "dir" | "file"; name: string }[]>([]);
+  const [fsEntries, setFsEntries] = useState<FileEntry[]>([]);
   const [fsContentPath, setFsContentPath] = useState<string | null>(null);
   const [fsContent, setFsContent] = useState<string>("");
   const [fsDraft, setFsDraft] = useState<string>("");
@@ -2145,8 +2148,14 @@ export default function Page() {
       setFsSaveStatus(null);
       try {
         const tree = await fetchFileTree(sessionToken, selectedProjectId, targetPath);
-        setFsEntries(tree.entries);
-        setFsPath(tree.path || targetPath || ".");
+        const basePath = tree.path || targetPath || ".";
+        // Transform entries to include full paths
+        const entriesWithPaths: FileEntry[] = tree.entries.map((entry) => ({
+          ...entry,
+          path: basePath === "." ? entry.name : `${basePath}/${entry.name}`,
+        }));
+        setFsEntries(entriesWithPaths);
+        setFsPath(basePath);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to load tree";
         setFsError(message);
@@ -2230,13 +2239,11 @@ export default function Page() {
     [sessionToken, selectedProjectId]
   );
 
-  const handleSelectEntry = (entry: { type: "dir" | "file"; name: string }) => {
-    const base = fsPath === "." ? "" : fsPath;
-    const nextPath = base ? `${base}/${entry.name}` : entry.name;
+  const handleSelectEntry = (entry: FileEntry) => {
     if (entry.type === "dir") {
-      loadFsTree(nextPath);
+      loadFsTree(entry.path);
     } else {
-      openFile(nextPath);
+      openFile(entry.path);
     }
   };
 
@@ -2556,34 +2563,26 @@ export default function Page() {
                 {fsError}
               </div>
             )}
-            {fsLoading && <div className="item-subtle">Loading files…</div>}
-            <div className="panel-text" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {fsEntries.map((entry) => (
-                <button
-                  key={entry.name}
-                  className="tab"
-                  onClick={() => handleSelectEntry(entry)}
-                  style={{ minWidth: 90 }}
-                >
-                  {entry.type === "dir" ? "📁" : "📄"} {entry.name}
-                </button>
-              ))}
-              {fsLoading && <span className="item-subtle">Loading…</span>}
-            </div>
+            <FileTree
+              entries={fsEntries}
+              currentPath={fsPath}
+              onSelectFile={openFile}
+              onNavigateDir={loadFsTree}
+              loading={fsLoading}
+            />
             {fsContentPath && (
               <>
                 <div className="item-subtle" style={{ marginBottom: 6 }}>
                   {fsContentPath} {fsDraft !== fsContent ? "(unsaved)" : null} {fsSaveStatus}
                 </div>
-                <textarea
-                  className="code-input"
-                  value={fsDraft}
-                  onChange={(e) => {
-                    setFsDraft(e.target.value);
+                <CodeViewer
+                  content={fsDraft}
+                  filePath={fsContentPath}
+                  readOnly={false}
+                  onChange={(newContent) => {
+                    setFsDraft(newContent);
                     setFsSaveStatus(null);
                   }}
-                  rows={14}
-                  disabled={fsLoading}
                 />
                 <div className="login-row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
                   <button
@@ -2648,17 +2647,12 @@ export default function Page() {
                   </div>
                 )}
                 {(fsDiffLoaded || fsDiff) && (
-                  <div
-                    className="panel-mono"
-                    style={{ maxHeight: 320, overflow: "auto", whiteSpace: "pre" }}
-                  >
-                    <div className="item-subtle" style={{ marginBottom: 6 }}>
-                      Diff for {fsContentPath}{" "}
-                      {fsBaseSha.trim() ? `from ${fsBaseSha.trim()}` : "(working tree)"}{" "}
-                      {fsTargetSha.trim() ? `→ ${fsTargetSha.trim()}` : ""}
-                    </div>
-                    {fsDiff || "No changes."}
-                  </div>
+                  <DiffViewer
+                    diff={fsDiff}
+                    filePath={fsContentPath}
+                    baseSha={fsBaseSha.trim() || undefined}
+                    targetSha={fsTargetSha.trim() || undefined}
+                  />
                 )}
               </>
             )}
