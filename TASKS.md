@@ -21,6 +21,7 @@ This replaces the earlier minimal TASKS.md. The tasks here are grouped into deve
 - [x] Add a small seed or creation flow so fresh installs show demo data
 - [x] Add UI flows to create projects, roadmaps, and chats from the main page
 - [x] Add path-based routes that mirror selection state (`/projects/:projectId/roadmaps/:roadmapId/chats/:chatId`)
+- [x] Add copyable deep links for selected project/roadmap/chat
 
 ---
 
@@ -108,7 +109,7 @@ Implement DB models + TypeScript interfaces:
 
 - [x] Three-column layout (Projects | Roadmap Lists | Chats)
 - [x] Main panel with tabs (Chat / Terminal / Code)
-- [ ] Routing structure:
+- [x] Routing structure:
   - `/projects/:projectId`
   - `/projects/:projectId/roadmaps/:roadmapId`
   - `/projects/:projectId/roadmaps/:roadmapId/chats/:chatId`
