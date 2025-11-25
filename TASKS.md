@@ -265,6 +265,7 @@ Implement DB models + TypeScript interfaces:
 - Ran the full `nexus-backend` test suite (`pnpm --filter nexus-backend test`) so collection of backend tests now pass.
 - Verified the frontend surface by running `pnpm --filter nexus-frontend lint` and the production `pnpm --filter nexus-frontend build` after fixing the remaining `[[...segments]]` `page.tsx` issues.
 - Added an authenticated `/api/auth/session` endpoint (covered in API docs) and new tests so clients can confirm a live token and user match.
+- Validated that `findChatForMerge` tolerates trimmed identifiers and case-insensitive titles by running `pnpm --filter nexus-backend test`, satisfying the merge target QA step.
 
 ---
 
