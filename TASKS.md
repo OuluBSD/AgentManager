@@ -128,6 +128,7 @@ Implement DB models + TypeScript interfaces:
 - [x] Grouping by category
 - [x] Right-click menu (edit, settings, favorite templates)
 - [x] Project selection triggers theme & context update
+- [x] Hook project context menu actions to actual edit/settings/template helpers
 
 ---
 
@@ -139,6 +140,7 @@ Implement DB models + TypeScript interfaces:
 - [x] Right-click menu (edit, add chat, open meta-chat)
 - [x] Visual separation for special entries
 - [x] API integration for real-time progress updates
+- [x] Refresh roadmap summaries when backend meta/chat status changes
 
 ---
 
