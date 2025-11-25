@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   buildTerminalWsUrl,
@@ -104,6 +104,27 @@ type MetaChat = {
   status: Status;
   progress: number;
   summary?: string;
+};
+type ContextTarget = "project" | "roadmap";
+type ContextMenuState = {
+  type: ContextTarget;
+  id: string;
+  title: string;
+  x: number;
+  y: number;
+};
+
+const contextActionConfig: Record<ContextTarget, { key: string; label: string }[]> = {
+  project: [
+    { key: "edit", label: "Edit project" },
+    { key: "settings", label: "Project settings" },
+    { key: "templates", label: "Favorite templates" },
+  ],
+  roadmap: [
+    { key: "edit", label: "Edit roadmap" },
+    { key: "add-chat", label: "Add chat" },
+    { key: "meta-chat", label: "Open meta chat" },
+  ],
 };
 const THEME_VARIABLES = {
   bg: "--bg",
@@ -289,6 +310,15 @@ function progressPercent(value: number) {
   return Math.max(0, Math.min(Math.round((value ?? 0) * 100), 100));
 }
 
+function formatStatusLabel(status: Status) {
+  return status
+    .split("_")
+    .map((segment) =>
+      segment.length ? `${segment.charAt(0).toUpperCase()}${segment.slice(1)}` : segment
+    )
+    .join(" ");
+}
+
 function summarizeAuditMeta(meta?: Record<string, unknown> | null) {
   if (!meta) return null;
   const data = meta as Record<string, unknown>;
@@ -375,6 +405,7 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [globalThemeMode, setGlobalThemeMode] = useState<GlobalThemeMode>("auto");
   const [projectThemePreset, setProjectThemePreset] = useState<ProjectThemePresetKey>("default");
   const [activeTab, setActiveTab] = useState<"Chat" | "Terminal" | "Code">("Chat");
@@ -471,6 +502,22 @@ export default function Page() {
       return haystack.some((value) => value.includes(filteredProjectQuery));
     });
   }, [filteredProjectQuery, projects]);
+  const groupedProjects = useMemo(() => {
+    const buckets: Record<string, ProjectItem[]> = {};
+    filteredProjects.forEach((project) => {
+      const category = project.category || "Uncategorized";
+      if (!buckets[category]) {
+        buckets[category] = [];
+      }
+      buckets[category].push(project);
+    });
+    return Object.entries(buckets)
+      .map(([category, items]) => ({
+        category,
+        items,
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category));
+  }, [filteredProjects]);
   const normalizedRoadmapFilter = roadmapFilter.trim();
   const filteredRoadmapQuery = normalizedRoadmapFilter.toLowerCase();
   const filteredRoadmaps = useMemo(() => {
@@ -550,6 +597,24 @@ export default function Page() {
   useEffect(() => {
     fsPathRef.current = fsPath;
   }, [fsPath]);
+
+  useEffect(() => {
+    if (!contextMenu || typeof window === "undefined") return;
+    const handleGlobalClose = () => setContextMenu(null);
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener("mousedown", handleGlobalClose);
+    window.addEventListener("scroll", handleGlobalClose, true);
+    window.addEventListener("keydown", handleKey);
+    return () => {
+      window.removeEventListener("mousedown", handleGlobalClose);
+      window.removeEventListener("scroll", handleGlobalClose, true);
+      window.removeEventListener("keydown", handleKey);
+    };
+  }, [contextMenu]);
 
   const eventTypeOptions = Array.from(new Set(auditEvents.map((e) => e.eventType))).sort();
 
@@ -1042,6 +1107,49 @@ export default function Page() {
       sessionToken,
       syncUrlSelection,
     ]
+  );
+
+  const openProjectContextMenu = useCallback(
+    (event: MouseEvent, project: ProjectItem) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setContextMenu({
+        type: "project",
+        id: project.id ?? project.name,
+        title: project.name,
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    [setContextMenu]
+  );
+
+  const openRoadmapContextMenu = useCallback(
+    (event: MouseEvent, roadmap: RoadmapItem) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setContextMenu({
+        type: "roadmap",
+        id: roadmap.id ?? roadmap.title,
+        title: roadmap.title,
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    [setContextMenu]
+  );
+
+  const handleContextAction = useCallback(
+    (actionKey: string) => {
+      if (!contextMenu) return;
+      const actions = contextActionConfig[contextMenu.type];
+      const action = actions.find((item) => item.key === actionKey);
+      setStatusMessage(
+        `${action?.label ?? actionKey} requested for ${contextMenu.title || contextMenu.id}.`
+      );
+      setContextMenu(null);
+    },
+    [contextMenu, setStatusMessage]
   );
 
   const handleLoginSubmit = async () => {
@@ -2321,6 +2429,12 @@ export default function Page() {
               {seeding ? "Seeding…" : "Seed demo"}
             </button>
           </header>
+          {selectedProject && (
+            <div className="item-subtle project-context">
+              Context: {selectedProject.category} · {formatStatusLabel(selectedProject.status)} ·{" "}
+              {selectedProject.info || "No project description yet."}
+            </div>
+          )}
           <div
             className="login-row"
             style={{ gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}
@@ -2392,7 +2506,7 @@ export default function Page() {
           {loading && <div className="item-subtle">Loading projects…</div>}
           {error && <div className="item-subtle">{error}</div>}
           <div className="list">
-            {!loading && filteredProjects.length === 0 && (
+            {!loading && groupedProjects.length === 0 && (
               <div className="item-subtle">
                 {projects.length === 0
                   ? sessionToken
@@ -2403,18 +2517,29 @@ export default function Page() {
                     : "No projects match the current filter."}
               </div>
             )}
-            {filteredProjects.map((p) => (
-              <div
-                className={`item ${selectedProjectId === p.id ? "active" : ""}`}
-                key={p.id ?? p.name}
-                onClick={() => p.id && handleSelectProject(p.id)}
-              >
-                <div className="item-line">
-                  <span className="status-dot" style={{ background: statusColor[p.status] }} />
-                  <span className="item-title">{p.name}</span>
-                  <span className="item-pill">{p.category}</span>
+            {groupedProjects.map((group) => (
+              <div className="project-group" key={group.category}>
+                <div className="project-group-header">
+                  <span>{group.category}</span>
+                  <span className="item-subtle">
+                    {group.items.length} project{group.items.length === 1 ? "" : "s"}
+                  </span>
                 </div>
-                <div className="item-sub">{p.info}</div>
+                {group.items.map((p) => (
+                  <div
+                    className={`item ${selectedProjectId === p.id ? "active" : ""}`}
+                    key={p.id ?? `${p.name}-${group.category}`}
+                    onClick={() => p.id && handleSelectProject(p.id)}
+                    onContextMenu={(event) => openProjectContextMenu(event, p)}
+                  >
+                    <div className="item-line">
+                      <span className="status-dot" style={{ background: statusColor[p.status] }} />
+                      <span className="item-title">{p.name}</span>
+                      <span className="item-pill">{p.category}</span>
+                    </div>
+                    <div className="item-sub">{p.info}</div>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
@@ -2424,6 +2549,15 @@ export default function Page() {
           <header className="column-header">
             <span>Roadmap Lists</span>
           </header>
+          {selectedRoadmapId && (
+            <div className="item-subtle roadmap-context">
+              {roadmapSummary
+                ? `${progressPercent(roadmapSummary.progress)}% · ${formatStatusLabel(
+                    roadmapSummary.status
+                  )} · ${roadmapSummary.summary ?? "Summary not available for this roadmap."}`
+                : "Loading roadmap context…"}
+            </div>
+          )}
           <div
             className="login-row"
             style={{ gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}
@@ -2480,23 +2614,54 @@ export default function Page() {
                     : "No roadmaps for this project yet."}
               </div>
             )}
-            {filteredRoadmaps.map((r) => (
-              <div
-                className={`item ${selectedRoadmapId === r.id ? "active" : ""}`}
-                key={r.id ?? r.title}
-                onClick={() => r.id && handleSelectRoadmap(r.id)}
-              >
-                <div className="item-line">
-                  <span
-                    className="status-dot"
-                    style={{ background: statusColor[r.status] ?? statusColor.active }}
-                  />
-                  <span className="item-title">{r.title}</span>
-                  <span className="item-subtle">{progressPercent(r.progress)}%</span>
+            {filteredRoadmaps.map((r) => {
+              const statusRecord = r.id ? roadmapStatus[r.id] : undefined;
+              const displayProgress = statusRecord?.progress ?? r.progress;
+              const displayStatus = statusRecord?.status ?? r.status;
+              const displaySummary = statusRecord?.summary ?? r.summary;
+              if (!r.title) return null;
+              return (
+                <div
+                  className={`item ${selectedRoadmapId === r.id ? "active" : ""}`}
+                  key={r.id ?? r.title}
+                  onClick={() => r.id && handleSelectRoadmap(r.id)}
+                  onContextMenu={(event) => openRoadmapContextMenu(event, r)}
+                >
+                  <div className="item-line">
+                    <span
+                      className="status-dot"
+                      style={{
+                        background: statusColor[displayStatus] ?? statusColor.active,
+                      }}
+                    />
+                    <span className="item-title">{r.title}</span>
+                    <span className="item-subtle">{progressPercent(displayProgress)}%</span>
+                  </div>
+                  <div className="roadmap-summary-row">
+                    <span className="item-subtle">
+                      {displaySummary ?? "Summary unavailable for this roadmap."}
+                    </span>
+                    <span className="item-subtle roadmap-status-text">
+                      {formatStatusLabel(displayStatus)}
+                    </span>
+                  </div>
+                  {r.tags.length > 0 && (
+                    <div className="roadmap-tags">
+                      {r.tags.map((tag) => (
+                        <span className="item-pill" key={`${r.title}-${tag}`}>
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {r.metaChatId && (
+                    <div className="item-subtle" style={{ marginTop: 4 }}>
+                      Meta chat linked
+                    </div>
+                  )}
                 </div>
-                <div className="item-sub">{r.summary ?? r.tags.join(", ")}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -2713,6 +2878,25 @@ export default function Page() {
         <div className={`toast ${fsToast.tone === "error" ? "toast-error" : "toast-success"}`}>
           <span style={{ fontWeight: 700 }}>{fsToast.message}</span>
           {fsToast.detail && <div className="item-subtle">{fsToast.detail}</div>}
+        </div>
+      )}
+      {contextMenu && (
+        <div
+          className="context-menu"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.stopPropagation()}
+        >
+          {contextActionConfig[contextMenu.type].map((action) => (
+            <button
+              key={action.key}
+              type="button"
+              className="context-menu-item"
+              onClick={() => handleContextAction(action.key)}
+            >
+              {action.label}
+            </button>
+          ))}
         </div>
       )}
     </main>

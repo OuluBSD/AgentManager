@@ -125,9 +125,9 @@ Implement DB models + TypeScript interfaces:
 - [ ] Color-coded activity status
 - [ ] Icons + categories + subtle info line
 - [x] Quick filter (text)
-- [ ] Grouping by category
-- [ ] Right-click menu (edit, settings, favorite templates)
-- [ ] Project selection triggers theme & context update
+- [x] Grouping by category
+- [x] Right-click menu (edit, settings, favorite templates)
+- [x] Project selection triggers theme & context update
 
 ---
 
@@ -135,10 +135,10 @@ Implement DB models + TypeScript interfaces:
 
 - [ ] List UI with tags, progress, status color
 - [x] Quick filter (title/tags)
-- [ ] Subtle summary info
-- [ ] Right-click menu (edit, add chat, open meta-chat)
-- [ ] Visual separation for special entries
-- [ ] API integration for real-time progress updates
+- [x] Subtle summary info
+- [x] Right-click menu (edit, add chat, open meta-chat)
+- [x] Visual separation for special entries
+- [x] API integration for real-time progress updates
 
 ---
 

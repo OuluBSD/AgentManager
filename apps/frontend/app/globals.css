@@ -82,6 +82,31 @@ body {
   gap: 8px;
 }
 
+.project-group {
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.project-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.project-context {
+  margin-bottom: 8px;
+}
+
 .item {
   background: var(--card);
   border: 1px solid var(--border);
@@ -129,6 +154,57 @@ body {
   margin-top: 4px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.roadmap-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.roadmap-status-text {
+  font-weight: 600;
+}
+
+.roadmap-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.roadmap-context {
+  margin-bottom: 8px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.context-menu {
+  position: fixed;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px 0;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  z-index: 40;
+  min-width: 180px;
+}
+
+.context-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  width: 100%;
+  text-align: left;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.context-menu-item:hover {
+  background: rgba(14, 165, 233, 0.15);
 }
 
 .status-dot {
