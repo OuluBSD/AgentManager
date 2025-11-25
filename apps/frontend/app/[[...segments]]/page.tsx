@@ -17,6 +17,7 @@ import {
   createRoadmap,
   createChat,
   updateChat,
+  mergeChat,
   writeFileContent,
   login,
   fetchAuditEvents,
@@ -1447,11 +1448,73 @@ export default function Page() {
             }
             break;
           case "merge": {
+            if (!chat.id) {
+              nextMessage = "Chat identifier missing.";
+              break;
+            }
+            if (!sessionToken) {
+              nextMessage = "Login required to merge chats.";
+              break;
+            }
             const mergeTarget = window.prompt("Merge into chat (enter target title or ID)", "");
-            if (mergeTarget && mergeTarget.trim()) {
-              nextMessage = `Merge requested for ${chat.title ?? "chat"} → ${mergeTarget.trim()}.`;
-            } else {
+            const trimmedTarget = mergeTarget?.trim();
+            if (!trimmedTarget) {
               nextMessage = "Merge canceled.";
+              break;
+            }
+            try {
+              const response = await mergeChat(sessionToken, chat.id, trimmedTarget);
+              const metadataFocus =
+                response.target.metadata && typeof response.target.metadata.focus === "string"
+                  ? response.target.metadata.focus
+                  : null;
+              setChats((prev) => {
+                const filtered = prev.filter((item) => item.id !== response.removedChatId);
+                let foundTarget = false;
+                const mapped = filtered.map((item) => {
+                  if (item.id === response.target.id) {
+                    foundTarget = true;
+                    return {
+                      ...item,
+                      title: response.target.title ?? item.title,
+                      goal: response.target.goal ?? item.goal,
+                      metadata: response.target.metadata ?? item.metadata,
+                      status: (response.target.status as Status) ?? item.status,
+                      progress: response.target.progress ?? item.progress,
+                      note: metadataFocus ?? response.target.goal ?? item.note,
+                      focus: metadataFocus ?? item.focus,
+                    };
+                  }
+                  return item;
+                });
+                if (!foundTarget) {
+                  mapped.push({
+                    id: response.target.id,
+                    title: response.target.title ?? "Chat",
+                    status: (response.target.status as Status) ?? "in_progress",
+                    progress: response.target.progress ?? 0,
+                    goal: response.target.goal,
+                    metadata: response.target.metadata ?? null,
+                    note: metadataFocus ?? response.target.goal,
+                    focus: metadataFocus ?? undefined,
+                  });
+                }
+                return mapped;
+              });
+              const shouldSwitch = selectedChatId === chat.id;
+              if (shouldSwitch) {
+                setSelectedChatId(response.target.id);
+              }
+              const shouldReloadMessages =
+                sessionToken && (shouldSwitch || response.target.id === selectedChatId);
+              if (shouldReloadMessages) {
+                await loadMessagesForChat(response.target.id, sessionToken);
+              }
+              nextMessage = `Merged ${chat.title ?? "chat"} into ${
+                response.target.title ?? response.target.id ?? "target chat"
+              }.`;
+            } catch (err) {
+              nextMessage = err instanceof Error ? err.message : "Unable to merge chats right now.";
             }
             break;
           }
@@ -1463,8 +1526,10 @@ export default function Page() {
     [
       contextMenu,
       handleSelectRoadmap,
+      loadMessagesForChat,
       openProjectSettingsPanel,
       openProjectTemplatesPanel,
+      selectedChatId,
       selectedProjectId,
       sessionToken,
       setActiveTab,

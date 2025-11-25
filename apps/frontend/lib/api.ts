@@ -37,6 +37,19 @@ export type RoadmapUpdatePayload = {
   progress?: number;
 };
 
+export type MergeChatResponse = {
+  target: {
+    id: string;
+    title: string;
+    status: string;
+    progress: number;
+    goal?: string;
+    metadata?: Record<string, unknown> | null;
+    templateId?: string;
+  };
+  removedChatId: string;
+};
+
 type LoginResponse = { token: string; user: { id: string; username: string } };
 
 async function fetchWithAuth<T>(token: string, path: string): Promise<T> {
@@ -297,6 +310,25 @@ export async function updateChat(
   });
   if (!res.ok) {
     throw new Error(`Failed to update chat (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function mergeChat(
+  token: string,
+  chatId: string,
+  targetIdentifier: string
+): Promise<MergeChatResponse> {
+  const res = await fetch(`${API_BASE}/api/chats/${chatId}/merge`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ targetIdentifier }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to merge chat (${res.status})`);
   }
   return res.json();
 }

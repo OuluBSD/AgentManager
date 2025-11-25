@@ -76,6 +76,7 @@ Implement DB models + TypeScript interfaces:
 - [x] PATCH /chats/:id
 - [x] GET /chats/:id/messages
 - [x] POST /chats/:id/messages
+- [x] POST /chats/:id/merge
 
 ### 3.4 Templates
 
@@ -153,6 +154,7 @@ Implement DB models + TypeScript interfaces:
 - [x] Click opens chat view in main panel
 - [x] **Meta-chat appears at top**, visually separated
 - [x] Right-click context menu (rename, open folder, merge)
+- [x] Merge action persists server-side history and refreshes chat selection
 
 ---
 
