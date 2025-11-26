@@ -491,6 +491,7 @@ export default function Page() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const openFolderForChatRef = useRef<((chat: ChatItem | null) => void) | null>(null);
   const [globalThemeMode, setGlobalThemeMode] = useState<GlobalThemeMode>("auto");
+  const [sidebarAnimationsEnabled, setSidebarAnimationsEnabled] = useState(true);
   const [projectThemePreset, setProjectThemePreset] = useState<ProjectThemePresetKey>("default");
   const [activeTab, setActiveTab] = useState<"Chat" | "Terminal" | "Code">("Chat");
   const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
@@ -3175,6 +3176,21 @@ export default function Page() {
               : `Base ${resolvedGlobalThemeMode} theme`}
           </span>
         </div>
+        <div
+          className="login-row"
+          style={{ gap: 8, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}
+        >
+          <input
+            type="checkbox"
+            id="sidebar-animations"
+            checked={sidebarAnimationsEnabled}
+            onChange={(e) => setSidebarAnimationsEnabled(e.target.checked)}
+            style={{ cursor: "pointer" }}
+          />
+          <label htmlFor="sidebar-animations" className="item-subtle" style={{ cursor: "pointer" }}>
+            Enable sidebar animations
+          </label>
+        </div>
         {statusMessage && (
           <div className="item-subtle" style={{ color: "#F59E0B", marginTop: 8 }}>
             {statusMessage}
@@ -3182,7 +3198,9 @@ export default function Page() {
         )}
       </div>
       <div className="columns">
-        <div className="column projects-column">
+        <div
+          className={`column projects-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}
+        >
           <header className="column-header">
             <span>Projects</span>
             <button
@@ -3328,7 +3346,9 @@ export default function Page() {
           </div>
         </div>
 
-        <div className="column roadmaps-column">
+        <div
+          className={`column roadmaps-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}
+        >
           <header className="column-header">
             <span>Roadmap Lists</span>
           </header>
@@ -3466,7 +3486,7 @@ export default function Page() {
           </div>
         </div>
 
-        <div className="column chats-column">
+        <div className={`column chats-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}>
           <header className="column-header">
             <span>Chats</span>
           </header>
@@ -3522,7 +3542,7 @@ export default function Page() {
           </div>
         </div>
 
-        <div className="column main-panel">
+        <div className={`column main-panel ${sidebarAnimationsEnabled ? "column-animated" : ""}`}>
           <header className="column-header">
             <span>Main Panel</span>
             <div className="tabs">

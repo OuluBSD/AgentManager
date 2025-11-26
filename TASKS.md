@@ -385,7 +385,7 @@ Implement DB models + TypeScript interfaces:
 - [x] Per-project theme override
 - [ ] Per-message-type color rules
 - [ ] Minimal vs. expanded detail modes
-- [ ] Sidebar animation toggles
+- [x] Sidebar animation toggles
 
 ---
 

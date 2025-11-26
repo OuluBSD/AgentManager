@@ -441,6 +441,37 @@ body {
   white-space: pre-wrap;
 }
 
+@keyframes slide-in-fade {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.column-animated {
+  animation: slide-in-fade 0.5s ease-out forwards;
+}
+
+.projects-column.column-animated {
+  animation-delay: 0.05s;
+}
+
+.roadmaps-column.column-animated {
+  animation-delay: 0.1s;
+}
+
+.chats-column.column-animated {
+  animation-delay: 0.15s;
+}
+
+.main-panel.column-animated {
+  animation-delay: 0.2s;
+}
+
 @media (max-width: 1200px) {
   .columns {
     grid-template-areas:
