@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+# nexus-cli wrapper script
+# Provides convenient access to the Project Nexus CLI management tool
+
+set -e
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Change to the project root directory
+cd "$SCRIPT_DIR"
+
+# Execute the CLI with all arguments passed through
+exec pnpm --filter nexus-backend exec tsx src/cli.ts "$@"
