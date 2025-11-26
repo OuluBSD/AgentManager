@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "nexus-cli": "./src/cli.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
@@ -13,6 +16,7 @@
     "@fastify/cors": "^8.5.0",
     "@fastify/websocket": "^7.0.1",
     "@nexus/shared": "workspace:*",
+    "commander": "^14.0.2",
     "dotenv": "^16.3.1",
     "drizzle-orm": "^0.44.7",
     "fastify": "^4.27.0",

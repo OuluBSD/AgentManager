@@ -13,7 +13,7 @@ const PBKDF2_DIGEST = "sha256";
 
 function mapSession(
   sessionRow: typeof schema.sessions.$inferSelect,
-  userRow: typeof schema.users.$inferSelect,
+  userRow: typeof schema.users.$inferSelect
 ): Session {
   return { token: sessionRow.token, userId: userRow.id, username: userRow.username };
 }
@@ -49,10 +49,19 @@ export async function getUserByUsername(db: Database, username: string) {
   return row ?? null;
 }
 
-export async function createUser(db: Database, username: string, password?: string) {
+export async function createUser(
+  db: Database,
+  username: string,
+  password?: string,
+  isAdmin?: boolean
+) {
   const [row] = await db
     .insert(schema.users)
-    .values({ username, passwordHash: password ? hashSecret(password) : undefined })
+    .values({
+      username,
+      passwordHash: password ? hashSecret(password) : undefined,
+      isAdmin: isAdmin ?? false,
+    })
     .returning();
   return row;
 }
@@ -65,7 +74,10 @@ export async function updateUserPassword(db: Database, userId: string, password:
 }
 
 export async function updateUserKeyfile(db: Database, userId: string, token: string) {
-  await db.update(schema.users).set({ keyfilePath: hashSecret(token) }).where(eq(schema.users.id, userId));
+  await db
+    .update(schema.users)
+    .set({ keyfilePath: hashSecret(token) })
+    .where(eq(schema.users.id, userId));
 }
 
 export async function createSession(db: Database, userId: string) {
@@ -114,4 +126,31 @@ export function verifyPassword(password: string, passwordHash?: string | null) {
 export function verifyKeyfile(token: string, keyfileHash?: string | null) {
   if (!keyfileHash) return false;
   return verifySecret(token, keyfileHash);
+}
+
+export async function listUsers(db: Database) {
+  const rows = await db.select().from(schema.users);
+  return rows;
+}
+
+export async function deleteUser(db: Database, username: string) {
+  const user = await getUserByUsername(db, username);
+  if (!user) {
+    throw new Error(`User not found: ${username}`);
+  }
+
+  // Delete all sessions first
+  await db.delete(schema.sessions).where(eq(schema.sessions.userId, user.id));
+
+  // Delete user
+  await db.delete(schema.users).where(eq(schema.users.id, user.id));
+}
+
+export async function changePassword(db: Database, username: string, newPassword: string) {
+  const user = await getUserByUsername(db, username);
+  if (!user) {
+    throw new Error(`User not found: ${username}`);
+  }
+
+  await updateUserPassword(db, user.id, newPassword);
 }

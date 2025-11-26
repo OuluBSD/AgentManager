@@ -337,10 +337,59 @@ Implement DB models + TypeScript interfaces:
 - Added `PROJECTS_ROOT` environment variable (defaults to `data/projects/`) for configurable git storage location.
 - Created comprehensive test suite (`apps/backend/src/__tests__/gitStorage.test.ts`) with 30+ tests covering all storage operations, JSONL serialization, git commits, and full project lifecycle integration.
 - Verified git storage implementation with `pnpm --filter nexus-backend test` (87 tests passing) and `pnpm --filter nexus-frontend lint && build` (all passing).
+- Created CLI management tool (`apps/backend/src/cli.ts`) with Commander.js providing comprehensive system administration via `nexus-cli` command.
+- Implemented user management commands: create users with admin flag, list all users, delete users with cascade, and change passwords.
+- Implemented project management commands: list projects, initialize git storage, export/import projects as git bundles for backup/migration.
+- Implemented storage management commands: view storage info with git commit history, cleanup orphaned project directories with dry-run mode.
+- Added system health check command that validates database connection, storage directory existence, and git installation.
+- Added setup command for initial installation that creates storage directory, initializes database, and creates admin user.
+- Extended authRepository with `listUsers`, `deleteUser`, `changePassword` functions and updated `createUser` to support admin flag.
+- Registered CLI as executable in package.json bin field, enabling `pnpm --filter nexus-backend exec tsx src/cli.ts <command>` invocation.
+- CLI features colored terminal output with success/error/warning/info indicators using ANSI escape codes for better UX.
 
 ---
 
-## 16. Authentication & Security
+## 15. CLI Management Tool (nexus-cli)
+
+- [x] Basic CLI structure with Commander.js
+- [x] `setup` command - Initialize database, storage, and admin user
+- [x] `health` command - System health checks (database, storage, git)
+- [x] User management commands
+  - [x] `user create` - Create new users with admin flag
+  - [x] `user list` - List all users with admin status
+  - [x] `user delete` - Delete users with confirmation
+  - [x] `user password` - Change user passwords
+- [x] Project management commands
+  - [x] `project list` - List all projects with status
+  - [x] `project init` - Initialize git storage for project
+  - [x] `project export` - Export project as git bundle
+  - [x] `project import` - Import project from git bundle
+- [x] Storage management commands
+  - [x] `storage info` - Show storage location and project list
+  - [x] `storage cleanup` - Clean up orphaned project directories
+- [ ] System account access controls
+  - [ ] Enable/disable OS user access to projects
+  - [ ] Map OS users to virtual users
+  - [ ] User isolation and sandboxing
+- [ ] Advanced management features
+  - [ ] Backup/restore automation
+  - [ ] Log viewing and rotation
+  - [ ] Storage usage reports and quotas
+  - [ ] Batch operations (bulk user/project management)
+
+---
+
+## 16. Theming & Preferences
+
+- [x] Global theme (auto-detect OS/browser)
+- [x] Per-project theme override
+- [ ] Per-message-type color rules
+- [ ] Minimal vs. expanded detail modes
+- [ ] Sidebar animation toggles
+
+---
+
+## 17. Authentication & Security
 
 - [x] Login screen UI
 - [x] Password or keyfile auth
@@ -351,7 +400,7 @@ Implement DB models + TypeScript interfaces:
 
 ---
 
-## 17. QA, Testing & Stability
+## 18. QA, Testing & Stability
 
 - [ ] Unit tests for backend logic
 - [ ] Frontend smoke tests
@@ -362,7 +411,7 @@ Implement DB models + TypeScript interfaces:
 
 ---
 
-## 18. Deployment
+## 19. Deployment
 
 - [ ] Dockerfiles for backend & frontend
 - [ ] Compose stack for local dev
@@ -372,7 +421,7 @@ Implement DB models + TypeScript interfaces:
 
 ---
 
-## 19. Future Expansion (Post-MVP)
+## 20. Future Expansion (Post-MVP)
 
 - [ ] Multi-agent coordination (architect/reviewer modes)
 - [ ] Real-time collaboration
