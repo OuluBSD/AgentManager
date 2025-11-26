@@ -8,6 +8,19 @@
   --muted: #94a3b8;
   --border: #1f2937;
   --ghost: #1e293b;
+
+  --chat-role-user-bg: rgba(14, 165, 233, 0.2);
+  --chat-role-user-text: #bae6fd;
+  --chat-role-assistant-bg: rgba(94, 234, 212, 0.18);
+  --chat-role-assistant-text: #a7f3d0;
+  --chat-role-status-bg: rgba(245, 158, 11, 0.18);
+  --chat-role-status-text: #fcd34d;
+  --chat-role-system-bg: rgba(148, 163, 184, 0.2);
+  --chat-role-system-text: #cbd5e1;
+  --chat-role-meta-bg: rgba(168, 85, 247, 0.2);
+  --chat-role-meta-text: #ddd6fe;
+  --chat-role-default-bg: rgba(148, 163, 184, 0.2);
+  --chat-role-default-text: #e5e7eb;
 }
 
 * {
@@ -430,6 +443,29 @@ body {
   letter-spacing: 0.04em;
   min-width: 70px;
   text-align: center;
+  background-color: var(--chat-role-default-bg);
+  color: var(--chat-role-default-text);
+}
+
+.chat-role-user {
+  background-color: var(--chat-role-user-bg);
+  color: var(--chat-role-user-text);
+}
+.chat-role-assistant {
+  background-color: var(--chat-role-assistant-bg);
+  color: var(--chat-role-assistant-text);
+}
+.chat-role-status {
+  background-color: var(--chat-role-status-bg);
+  color: var(--chat-role-status-text);
+}
+.chat-role-system {
+  background-color: var(--chat-role-system-bg);
+  color: var(--chat-role-system-text);
+}
+.chat-role-meta {
+  background-color: var(--chat-role-meta-bg);
+  color: var(--chat-role-meta-text);
 }
 
 .bubble {

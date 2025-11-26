@@ -2963,29 +2963,7 @@ export default function Page() {
                   key={message.id}
                   ref={(el) => messageNav.registerRef(message.id, el)}
                 >
-                  <span
-                    className="chat-role"
-                    style={{
-                      background:
-                        {
-                          user: "rgba(14,165,233,0.2)",
-                          assistant: "rgba(94,234,212,0.18)",
-                          status: "rgba(245,158,11,0.18)",
-                          system: "rgba(148,163,184,0.2)",
-                          meta: "rgba(168,85,247,0.2)",
-                        }[message.role] ?? "rgba(148,163,184,0.2)",
-                      color:
-                        {
-                          user: "#bae6fd",
-                          assistant: "#a7f3d0",
-                          status: "#fcd34d",
-                          system: "#cbd5e1",
-                          meta: "#ddd6fe",
-                        }[message.role] ?? "#e5e7eb",
-                    }}
-                  >
-                    {message.role}
-                  </span>
+                  <span className={`chat-role chat-role-${message.role}`}>{message.role}</span>
                   <div className="bubble">{message.content}</div>
                   <span className="item-subtle">
                     {new Date(message.createdAt).toLocaleTimeString()}
