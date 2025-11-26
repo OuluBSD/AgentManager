@@ -11,6 +11,7 @@ type TerminalProps = {
   projectId: string;
   onSessionCreated?: (sessionId: string) => void;
   onSessionClosed?: () => void;
+  autoConnect: boolean;
 };
 
 export function Terminal({
@@ -18,6 +19,7 @@ export function Terminal({
   projectId,
   onSessionCreated,
   onSessionClosed,
+  autoConnect,
 }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<InstanceType<typeof import("@xterm/xterm").Terminal> | null>(null);
@@ -26,6 +28,13 @@ export function Terminal({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isAttached, setIsAttached] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // useEffect to trigger auto-connect
+  useEffect(() => {
+    if (autoConnect && sessionToken && projectId && !isAttached) {
+      handlePlay();
+    }
+  }, [autoConnect, sessionToken, projectId, isAttached, handlePlay]);
 
   // Create terminal session
   const createSession = async () => {
@@ -207,7 +216,7 @@ export function Terminal({
     };
   }, [onSessionClosed]);
 
-  const handlePlay = async () => {
+  const handlePlay = useCallback(async () => {
     if (!sessionId) {
       const sid = await createSession();
       if (sid) {
@@ -216,7 +225,7 @@ export function Terminal({
     } else if (!isAttached) {
       attachSession(sessionId);
     }
-  };
+  }, [sessionId, createSession, isAttached, attachSession]);
 
   const handleStop = () => {
     detachSession();

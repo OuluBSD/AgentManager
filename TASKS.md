@@ -190,7 +190,7 @@ Implement DB models + TypeScript interfaces:
 
 - [x] Persistent server-side PTY session
 - [x] Attach/Detach (Play/Stop)
-- [ ] Auto-open setting
+- [x] Auto-open setting
 - [x] Start in project root or task folder
 - [x] xterm.js integration
 - [x] Transport via WebSocket

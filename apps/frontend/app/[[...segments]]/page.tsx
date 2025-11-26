@@ -492,6 +492,11 @@ export default function Page() {
   const openFolderForChatRef = useRef<((chat: ChatItem | null) => void) | null>(null);
   const [globalThemeMode, setGlobalThemeMode] = useState<GlobalThemeMode>("auto");
   const [sidebarAnimationsEnabled, setSidebarAnimationsEnabled] = useState(true);
+  const TERMINAL_AUTO_OPEN_KEY = "agentmgr:terminalAutoOpen";
+  const [autoOpenTerminal, setAutoOpenTerminal] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(TERMINAL_AUTO_OPEN_KEY) === "true";
+  });
   const [projectThemePreset, setProjectThemePreset] = useState<ProjectThemePresetKey>("default");
   const [activeTab, setActiveTab] = useState<"Chat" | "Terminal" | "Code">("Chat");
   const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
@@ -570,6 +575,18 @@ export default function Page() {
   useEffect(() => {
     applyThemePalette(activePalette);
   }, [activePalette]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("agentmgr:sidebarAnimationsEnabled", String(sidebarAnimationsEnabled));
+    }
+  }, [sidebarAnimationsEnabled]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(TERMINAL_AUTO_OPEN_KEY, String(autoOpenTerminal));
+    }
+  }, [autoOpenTerminal, TERMINAL_AUTO_OPEN_KEY]);
   const [projectDraft, setProjectDraft] = useState({
     name: "",
     category: "",
@@ -2598,6 +2615,7 @@ export default function Page() {
             projectId={selectedProjectId}
             onSessionCreated={(sid) => setTerminalSessionId(sid)}
             onSessionClosed={() => setTerminalSessionId(null)}
+            autoConnect={autoOpenTerminal}
           />
         ) : (
           <div className="panel-card">
@@ -3167,6 +3185,21 @@ export default function Page() {
           />
           <label htmlFor="sidebar-animations" className="item-subtle" style={{ cursor: "pointer" }}>
             Enable sidebar animations
+          </label>
+        </div>
+        <div
+          className="login-row"
+          style={{ gap: 8, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}
+        >
+          <input
+            type="checkbox"
+            id="terminal-auto-open"
+            checked={autoOpenTerminal}
+            onChange={(e) => setAutoOpenTerminal(e.target.checked)}
+            style={{ cursor: "pointer" }}
+          />
+          <label htmlFor="terminal-auto-open" className="item-subtle" style={{ cursor: "pointer" }}>
+            Auto-open terminal on project selection
           </label>
         </div>
         {statusMessage && (
