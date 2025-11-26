@@ -44,6 +44,7 @@ import {
   getSlashCommandSuggestions,
   type SlashCommandContext,
 } from "../../lib/slashCommands";
+import { Login } from "../../components/Login";
 
 type Status =
   | "inactive"
@@ -1095,6 +1096,11 @@ export default function Page() {
       try {
         setSessionToken(token);
         setActiveUser(activeUsername);
+        // Persist session to localStorage
+        if (typeof window !== "undefined") {
+          localStorage.setItem("sessionToken", token);
+          localStorage.setItem("username", activeUsername);
+        }
         try {
           const templateData = await fetchTemplates(token);
           setTemplates(templateData as TemplateItem[]);
@@ -1154,28 +1160,49 @@ export default function Page() {
     }
   }, [sessionToken]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
+  const handleLoginSuccess = useCallback(
+    async (token: string, username: string) => {
       setLoading(true);
       setError(null);
       try {
-        const { token } = await login(DEMO_USERNAME, DEMO_PASSWORD, DEMO_KEYFILE || undefined);
-        if (cancelled) return;
-        await hydrateWorkspace(token, DEMO_USERNAME);
+        await hydrateWorkspace(token, username);
       } catch (err) {
-        if (!cancelled) {
-          clearWorkspaceState("Backend unreachable.");
-        }
+        clearWorkspaceState("Failed to load workspace data.");
       } finally {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       }
-    };
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [clearWorkspaceState, hydrateWorkspace]);
+    },
+    [clearWorkspaceState, hydrateWorkspace]
+  );
+
+  const handleLogout = useCallback(() => {
+    setSessionToken(null);
+    setActiveUser(null);
+    clearWorkspaceState("Logged out");
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("sessionToken");
+      localStorage.removeItem("username");
+    }
+  }, [clearWorkspaceState]);
+
+  // Check for stored session token or auto-login with demo credentials
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedToken = localStorage.getItem("sessionToken");
+    const storedUsername = localStorage.getItem("username");
+    if (storedToken && storedUsername) {
+      handleLoginSuccess(storedToken, storedUsername);
+      return;
+    }
+    // Auto-login with demo credentials if available (for testing/development)
+    if (DEMO_USERNAME && DEMO_PASSWORD) {
+      login(DEMO_USERNAME, DEMO_PASSWORD, DEMO_KEYFILE || undefined)
+        .then(({ token }) => handleLoginSuccess(token, DEMO_USERNAME))
+        .catch(() => {
+          // Silent failure - user can login manually
+        });
+    }
+  }, [handleLoginSuccess]);
 
   const cancelRoadmapEdit = useCallback(() => {
     setEditingRoadmapId(null);
@@ -3099,33 +3126,30 @@ export default function Page() {
       ? contextPanel.roadmapTitle
       : contextPanel?.projectName;
 
+  // Show login screen if not authenticated
+  if (!sessionToken) {
+    return <Login onLoginSuccess={handleLoginSuccess} />;
+  }
+
   return (
     <main className="page">
       <div className="panel-card" style={{ marginBottom: 12 }}>
-        <div className="panel-title">Login</div>
-        <div className="panel-text">Use environment defaults or override to test other users.</div>
-        <div className="login-row">
-          <input
-            className="filter"
-            placeholder="Username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-          />
-          <input
-            className="filter"
-            placeholder="Password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <input
-            className="filter"
-            placeholder="Keyfile token (optional)"
-            value={keyfileToken}
-            onChange={(e) => setKeyfileToken(e.target.value)}
-          />
-          <button className="tab" onClick={handleLoginSubmit} disabled={loading || !username}>
-            {loading ? "Loading…" : "Login"}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 8,
+          }}
+        >
+          <div>
+            <div className="panel-title">Project Nexus</div>
+            <div className="item-subtle">
+              Logged in as <strong>{activeUser}</strong>
+            </div>
+          </div>
+          <button className="ghost" onClick={handleLogout} style={{ alignSelf: "flex-start" }}>
+            Logout
           </button>
         </div>
         <div
@@ -3151,18 +3175,8 @@ export default function Page() {
               : `Base ${resolvedGlobalThemeMode} theme`}
           </span>
         </div>
-        {loginError && (
-          <div className="item-subtle" style={{ color: "#EF4444" }}>
-            {loginError}
-          </div>
-        )}
-        <div className="item-subtle">
-          {activeUser && sessionToken
-            ? `Active user: ${activeUser} (token ${sessionToken.slice(0, 6)}…)`
-            : "Active user: none (mock data)"}
-        </div>
         {statusMessage && (
-          <div className="item-subtle" style={{ color: "#F59E0B" }}>
+          <div className="item-subtle" style={{ color: "#F59E0B", marginTop: 8 }}>
             {statusMessage}
           </div>
         )}

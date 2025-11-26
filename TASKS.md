@@ -99,10 +99,10 @@ Implement DB models + TypeScript interfaces:
 
 ### 3.7 Authentication & Security
 
-- [ ] POST /auth/login
-- [ ] POST /auth/logout
-- [ ] Session validation middleware
-- [ ] Keyfile / password support
+- [x] POST /auth/login
+- [x] POST /auth/logout
+- [x] Session validation middleware
+- [x] Keyfile / password support
 
 ---
 
@@ -307,14 +307,23 @@ Implement DB models + TypeScript interfaces:
 - Added JSON validation for metadata field in template creation form.
 - Updated frontend API types in `apps/frontend/lib/api.ts` to match backend Template structure.
 - Verified template enhancements with `pnpm --filter nexus-frontend lint`, `pnpm --filter nexus-frontend build`, `pnpm --filter nexus-frontend e2e`, and `pnpm --filter nexus-backend test` (all passing).
+- Created dedicated `Login` component (`apps/frontend/components/Login.tsx`) with modern UI design, supporting both password and keyfile token authentication.
+- Updated main workspace page to conditionally render Login component when no session token is present, implementing proper authentication flow.
+- Added `handleLogout` function to clear session state and remove credentials from localStorage.
+- Updated login API signature in `apps/frontend/lib/api.ts` to make password optional (matching backend behavior that allows password OR keyfile authentication).
+- Implemented session persistence using localStorage for seamless page refreshes (stores sessionToken and username).
+- Added auto-login feature using demo credentials (NEXT_PUBLIC_DEMO_USERNAME, NEXT_PUBLIC_DEMO_PASSWORD) for development/testing environments.
+- Replaced old embedded login panel with clean user info header showing logged-in username and logout button.
+- Backend authentication already complete with login/logout endpoints, session validation middleware, PBKDF2 password hashing, keyfile support, and rate limiting (5 failed attempts = 2min lockout).
+- Verified authentication flow with `pnpm --filter nexus-frontend lint`, `pnpm --filter nexus-frontend build`, `pnpm --filter nexus-frontend e2e`, and `pnpm --filter nexus-backend test` (all passing).
 
 ---
 
 ## 16. Authentication & Security
 
-- [ ] Login screen UI
-- [ ] Password or keyfile auth
-- [ ] Session management
+- [x] Login screen UI
+- [x] Password or keyfile auth
+- [x] Session management
 - [ ] OS user mapping + virtual user registry
 - [ ] Permissions scaffold
 - [ ] Audit logs for agent activity

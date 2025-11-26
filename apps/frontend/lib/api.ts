@@ -64,7 +64,7 @@ async function fetchWithAuth<T>(token: string, path: string): Promise<T> {
 
 export async function login(
   username: string,
-  password: string,
+  password?: string,
   keyfileToken?: string
 ): Promise<LoginResponse> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
