@@ -182,7 +182,7 @@ Implement DB models + TypeScript interfaces:
 
 - [x] Multiline input (Enter send, Shift+Enter newline)
 - [x] Slash commands + autocomplete
-- [ ] Future attach-from-server file dialog (scaffold only)
+- [x] Future attach-from-server file dialog (scaffold only)
 
 ---
 

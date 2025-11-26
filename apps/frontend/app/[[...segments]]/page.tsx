@@ -39,6 +39,7 @@ import { CodeViewer } from "../../components/CodeViewer";
 import { DiffViewer } from "../../components/DiffViewer";
 import { Terminal } from "../../components/Terminal";
 import { SlashCommandAutocomplete } from "../../components/SlashCommandAutocomplete";
+import { FileDialog } from "../../components/FileDialog";
 import {
   executeSlashCommand,
   getSlashCommandSuggestions,
@@ -543,6 +544,7 @@ export default function Page() {
     ReturnType<typeof getSlashCommandSuggestions>
   >([]);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
+  const [isFileDialogOpen, setIsFileDialogOpen] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const [chatStatusDraft, setChatStatusDraft] = useState<Status>("in_progress");
   const [chatProgressDraft, setChatProgressDraft] = useState<string>("0");
@@ -3102,6 +3104,14 @@ export default function Page() {
                 disabled={!sessionToken || sendingMessage}
               />
               <button
+                className="ghost"
+                style={{ alignSelf: "stretch", minHeight: 44 }}
+                onClick={() => setIsFileDialogOpen(true)}
+                disabled={!sessionToken}
+              >
+                Attach
+              </button>
+              <button
                 className="tab"
                 style={{ alignSelf: "stretch", minHeight: 44 }}
                 onClick={handleSendMessage}
@@ -3142,6 +3152,7 @@ export default function Page() {
 
   return (
     <main className="page">
+      <FileDialog isOpen={isFileDialogOpen} onClose={() => setIsFileDialogOpen(false)} />
       <div className="panel-card" style={{ marginBottom: 12 }}>
         <div
           style={{
