@@ -11,5 +11,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Change to the project root directory
 cd "$SCRIPT_DIR"
 
+# Check if pnpm is available
+if ! command -v pnpm &> /dev/null; then
+    echo "Error: pnpm is not installed or not in PATH"
+    echo ""
+    echo "Please install pnpm:"
+    echo "  npm install -g pnpm"
+    echo ""
+    echo "Or use the full command:"
+    echo "  npx pnpm --filter nexus-backend exec tsx src/cli.ts $*"
+    exit 1
+fi
+
 # Execute the CLI with all arguments passed through
 exec pnpm --filter nexus-backend exec tsx src/cli.ts "$@"
