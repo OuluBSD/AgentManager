@@ -4,12 +4,27 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="$HOME/.local/node_modules/.bin:$PATH"
 
-# Load .env if present to pass DATABASE_URL / demo creds through to dev servers.
-if [ -f "$ROOT/.env" ]; then
+# Configuration file path
+CONFIG_FILE="$HOME/.config/agent-manager/config.env"
+
+# Load config from ~/.config/agent-manager/config.env if it exists (preferred)
+if [ -f "$CONFIG_FILE" ]; then
+  echo "Loading configuration from $CONFIG_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+  set +a
+# Otherwise, load .env from repository root (fallback)
+elif [ -f "$ROOT/.env" ]; then
+  echo "Loading configuration from $ROOT/.env"
   set -a
   # shellcheck disable=SC1090
   source "$ROOT/.env"
   set +a
+else
+  echo "Warning: No configuration file found."
+  echo "Run ./install.sh to create $CONFIG_FILE"
+  echo "Or create $ROOT/.env manually"
 fi
 
 # Terminal streams close after 10 minutes idle by default. Override or disable (0) here.
