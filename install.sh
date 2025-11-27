@@ -191,65 +191,52 @@ PROJECTS_ROOT="${PROJECTS_ROOT/#\~/$HOME}"
 echo ""
 echo -e "${YELLOW}Writing configuration to $CONFIG_FILE...${NC}"
 
-# Write configuration file
-cat > "$CONFIG_FILE" << 'EOF'
+# Write configuration file directly with values (no placeholder replacement needed)
+cat > "$CONFIG_FILE" <<EOF
 # Agent Manager Configuration
-# Generated on DATE_PLACEHOLDER
+# Generated on $(date)
 
 # Git repository for persistence
-AGENT_MANAGER_REPO_DIR="REPO_DIR_PLACEHOLDER"
+AGENT_MANAGER_REPO_DIR="$REPO_DIR"
 
 # Server configuration
-HOST="HOST_PLACEHOLDER"
-PORT="PORT_PLACEHOLDER"
+HOST="$HOST"
+PORT="$PORT"
 
 # Database configuration
 # Type: json (JSON files), postgres (PostgreSQL), memory (in-memory, not persistent)
-DATABASE_TYPE="DATABASE_TYPE_PLACEHOLDER"
+DATABASE_TYPE="$DATABASE_TYPE"
 
 # Database URL (PostgreSQL connection string, only needed for DATABASE_TYPE=postgres)
-DATABASE_URL="DATABASE_URL_PLACEHOLDER"
+DATABASE_URL="$DATABASE_URL"
 
 # Projects root directory
-PROJECTS_ROOT="PROJECTS_ROOT_PLACEHOLDER"
+PROJECTS_ROOT="$PROJECTS_ROOT"
 
 # Terminal idle timeout in milliseconds (0 disables idle shutdowns)
 TERMINAL_IDLE_MS=600000
 
 # Frontend configuration
-NEXT_PUBLIC_BACKEND_HTTP_BASE="http://localhost:PORT_PLACEHOLDER"
+NEXT_PUBLIC_BACKEND_HTTP_BASE="http://localhost:$PORT"
 EOF
-
-# Replace placeholders with actual values
-sed -i "s|DATE_PLACEHOLDER|$(date)|g" "$CONFIG_FILE"
-sed -i "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$CONFIG_FILE"
-sed -i "s|HOST_PLACEHOLDER|$HOST|g" "$CONFIG_FILE"
-sed -i "s|PORT_PLACEHOLDER|$PORT|g" "$CONFIG_FILE"
-sed -i "s|DATABASE_TYPE_PLACEHOLDER|${DATABASE_TYPE}|g" "$CONFIG_FILE"
-sed -i "s|DATABASE_URL_PLACEHOLDER|$DATABASE_URL|g" "$CONFIG_FILE"
-sed -i "s|PROJECTS_ROOT_PLACEHOLDER|$PROJECTS_ROOT|g" "$CONFIG_FILE"
 
 # Add user credentials if created
 if [ -n "$ADMIN_USERNAME" ]; then
-    cat >> "$CONFIG_FILE" << 'EOF'
+    cat >> "$CONFIG_FILE" <<EOF
 
 # Admin user credentials (for initial setup only)
-SETUP_ADMIN_USERNAME="ADMIN_USERNAME_PLACEHOLDER"
-SETUP_ADMIN_PASSWORD="ADMIN_PASSWORD_PLACEHOLDER"
+SETUP_ADMIN_USERNAME="$ADMIN_USERNAME"
+SETUP_ADMIN_PASSWORD="$ADMIN_PASSWORD"
 EOF
-    sed -i "s|ADMIN_USERNAME_PLACEHOLDER|$ADMIN_USERNAME|g" "$CONFIG_FILE"
-    sed -i "s|ADMIN_PASSWORD_PLACEHOLDER|$ADMIN_PASSWORD|g" "$CONFIG_FILE"
 fi
 
 if [ -n "$REGULAR_USERNAME" ]; then
-    cat >> "$CONFIG_FILE" << 'EOF'
+    cat >> "$CONFIG_FILE" <<EOF
 
 # Regular user credentials (for initial setup only)
-SETUP_REGULAR_USERNAME="REGULAR_USERNAME_PLACEHOLDER"
-SETUP_REGULAR_PASSWORD="REGULAR_PASSWORD_PLACEHOLDER"
+SETUP_REGULAR_USERNAME="$REGULAR_USERNAME"
+SETUP_REGULAR_PASSWORD="$REGULAR_PASSWORD"
 EOF
-    sed -i "s|REGULAR_USERNAME_PLACEHOLDER|$REGULAR_USERNAME|g" "$CONFIG_FILE"
-    sed -i "s|REGULAR_PASSWORD_PLACEHOLDER|$REGULAR_PASSWORD|g" "$CONFIG_FILE"
 fi
 
 echo -e "${GREEN}Configuration saved successfully!${NC}"

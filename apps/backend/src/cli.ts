@@ -2,8 +2,10 @@
 import { Command } from "commander";
 import { loadEnv } from "./utils/env";
 import { GitStorage } from "./services/gitStorage";
-import * as authRepo from "./services/authRepository";
+import * as pgAuthRepo from "./services/authRepository";
+import * as jsonAuthRepo from "./services/jsonAuthRepository";
 import * as projectRepo from "./services/projectRepository";
+import { JsonDatabase } from "./services/jsonDatabase";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -11,6 +13,7 @@ import { Pool } from "pg";
 import * as schema from "@nexus/shared/db/schema";
 
 type Database = NodePgDatabase<typeof schema>;
+type DbBackend = { type: "postgres"; db: Database } | { type: "json"; db: JsonDatabase };
 
 const program = new Command();
 const env = loadEnv(process.env);
@@ -46,24 +49,54 @@ function heading(msg: string) {
   console.log(`\n${colors.bright}${colors.cyan}${msg}${colors.reset}\n`);
 }
 
-// Initialize database connection for CLI commands
-async function getDatabase(): Promise<Database> {
-  if (!env.DATABASE_URL) {
-    error("DATABASE_URL is not set in environment");
-    process.exit(1);
+// Initialize database connection (PostgreSQL or JSON)
+async function getDatabase(): Promise<DbBackend> {
+  const dbType = process.env.DATABASE_TYPE || "auto";
+  const dataDir = process.env.AGENT_MANAGER_REPO_DIR;
+
+  // Try PostgreSQL if configured
+  if ((dbType === "postgres" || dbType === "auto") && env.DATABASE_URL) {
+    const pool = new Pool({ connectionString: env.DATABASE_URL });
+
+    try {
+      await pool.query("select 1");
+      const db = drizzle(pool, { schema });
+      info("Using PostgreSQL database");
+      return { type: "postgres", db };
+    } catch (err: any) {
+      if (dbType === "postgres") {
+        error(`Failed to connect to PostgreSQL: ${err.message}`);
+        await pool.end();
+        process.exit(1);
+      }
+      await pool.end();
+    }
   }
 
-  const pool = new Pool({ connectionString: env.DATABASE_URL });
-
-  try {
-    await pool.query("select 1");
-  } catch (err: any) {
-    error(`Failed to connect to database: ${err.message}`);
-    await pool.end();
-    process.exit(1);
+  // Try JSON database if configured
+  if ((dbType === "json" || dbType === "auto") && dataDir) {
+    try {
+      const jsonDb = new JsonDatabase({
+        dataDir,
+        maxCacheSize: 1000,
+        cacheTTL: 5 * 60 * 1000,
+      });
+      await jsonDb.initialize();
+      info("Using JSON file database");
+      return { type: "json", db: jsonDb };
+    } catch (err: any) {
+      if (dbType === "json") {
+        error(`Failed to initialize JSON database: ${err.message}`);
+        process.exit(1);
+      }
+    }
   }
 
-  return drizzle(pool, { schema });
+  // No database available
+  error("No database configured.");
+  error("Set DATABASE_URL for PostgreSQL or AGENT_MANAGER_REPO_DIR for JSON storage.");
+  error("Run ./install.sh to configure the database.");
+  process.exit(1);
 }
 
 // ============================================================================
@@ -148,8 +181,23 @@ userCmd
     heading("Create User");
 
     try {
-      const db = await getDatabase();
-      await authRepo.createUser(db, options.username, options.password, options.admin || false);
+      const backend = await getDatabase();
+
+      if (backend.type === "postgres") {
+        await pgAuthRepo.createUser(
+          backend.db,
+          options.username,
+          options.password,
+          options.admin || false
+        );
+      } else {
+        await jsonAuthRepo.createUser(
+          backend.db,
+          options.username,
+          options.password,
+          options.admin || false
+        );
+      }
 
       success(`User created: ${options.username}`);
       if (options.admin) {
@@ -171,8 +219,11 @@ userCmd
     heading("Users");
 
     try {
-      const db = await getDatabase();
-      const users = await authRepo.listUsers(db);
+      const backend = await getDatabase();
+      const users =
+        backend.type === "postgres"
+          ? await pgAuthRepo.listUsers(backend.db)
+          : await jsonAuthRepo.listUsers(backend.db);
 
       if (users.length === 0) {
         info("No users found");
@@ -208,8 +259,14 @@ userCmd
     }
 
     try {
-      const db = await getDatabase();
-      await authRepo.deleteUser(db, options.username);
+      const backend = await getDatabase();
+
+      if (backend.type === "postgres") {
+        await pgAuthRepo.deleteUser(backend.db, options.username);
+      } else {
+        await jsonAuthRepo.deleteUser(backend.db, options.username);
+      }
+
       success(`User deleted: ${options.username}`);
     } catch (err: any) {
       error(`Failed to delete user: ${err.message}`);
@@ -226,8 +283,14 @@ userCmd
     heading("Change Password");
 
     try {
-      const db = await getDatabase();
-      await authRepo.changePassword(db, options.username, options.password);
+      const backend = await getDatabase();
+
+      if (backend.type === "postgres") {
+        await pgAuthRepo.changePassword(backend.db, options.username, options.password);
+      } else {
+        await jsonAuthRepo.changePassword(backend.db, options.username, options.password);
+      }
+
       success(`Password updated for: ${options.username}`);
     } catch (err: any) {
       error(`Failed to change password: ${err.message}`);
@@ -504,12 +567,11 @@ program
     // Check database
     try {
       info("Checking database connection...");
-      if (!env.DATABASE_URL) {
-        error("DATABASE_URL not configured");
-        hasErrors = true;
+      const backend = await getDatabase();
+      if (backend.type === "postgres") {
+        success("Database connection: OK (PostgreSQL)");
       } else {
-        const db = await getDatabase();
-        success("Database connection: OK");
+        success("Database connection: OK (JSON files)");
       }
     } catch (err: any) {
       error(`Database connection: FAILED - ${err.message}`);
