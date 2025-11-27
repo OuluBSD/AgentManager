@@ -10,8 +10,10 @@ import {
   verifyKeyfile,
   verifyPassword,
 } from "../services/authRepository";
+import * as jsonAuthRepo from "../services/jsonAuthRepository";
 import { createSession, store } from "../services/mockStore";
 import { requireSession } from "../utils/auth";
+import { recordAuditEvent } from "../services/auditLogger";
 
 const LOGIN_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const LOGIN_BLOCK_MS = 2 * 60 * 1000; // 2 minutes lockout after max failures
@@ -80,6 +82,95 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
+    // Try JSON database if available
+    if (fastify.jsonDb) {
+      try {
+        await jsonAuthRepo.purgeExpiredSessions(fastify.jsonDb);
+        const existing = await jsonAuthRepo.getUserByUsername(fastify.jsonDb, body.username);
+        const passwordValid =
+          !!existing?.passwordHash &&
+          !!body.password &&
+          jsonAuthRepo.verifyPassword(body.password, existing.passwordHash);
+        const keyfileValid =
+          !!existing?.keyfilePath &&
+          !!body.keyfileToken &&
+          jsonAuthRepo.verifyKeyfile(body.keyfileToken, existing.keyfilePath);
+
+        if (existing) {
+          const needsPassword = !!existing.passwordHash;
+          const needsKeyfile = !!existing.keyfilePath;
+          const authenticated = passwordValid || keyfileValid || (!needsPassword && !needsKeyfile);
+
+          if (!authenticated) {
+            recordFailure(attemptKey);
+            reply
+              .code(401)
+              .send({ error: { code: "unauthorized", message: "Invalid credentials for user" } });
+            return;
+          }
+
+          if (!existing.passwordHash && body.password) {
+            await jsonAuthRepo.updateUserPassword(fastify.jsonDb, existing.id, body.password);
+          }
+          if (!existing.keyfilePath && body.keyfileToken) {
+            await jsonAuthRepo.updateUserKeyfile(fastify.jsonDb, existing.id, body.keyfileToken);
+          }
+
+          const sessionRow = await jsonAuthRepo.createSession(fastify.jsonDb, existing.id);
+          reply.send({
+            token: sessionRow.token,
+            user: { id: existing.id, username: existing.username },
+          });
+          loginAttempts.delete(attemptKey);
+          await recordAuditEvent(fastify, {
+            userId: existing.id,
+            eventType: "auth:login",
+            ipAddress: request.ip,
+            metadata: {
+              username: existing.username,
+              method: body.password ? "password" : "keyfile",
+            },
+          });
+          return;
+        }
+
+        if (!body.password && !body.keyfileToken) {
+          recordFailure(attemptKey);
+          reply.code(400).send({
+            error: { code: "bad_request", message: "Provide a password or keyfileToken" },
+          });
+          return;
+        }
+
+        const userRow = await jsonAuthRepo.createUser(fastify.jsonDb, body.username, body.password);
+        if (body.keyfileToken) {
+          await jsonAuthRepo.updateUserKeyfile(fastify.jsonDb, userRow.id, body.keyfileToken);
+        }
+
+        const sessionRow = await jsonAuthRepo.createSession(fastify.jsonDb, userRow.id);
+        reply.send({
+          token: sessionRow.token,
+          user: { id: userRow.id, username: userRow.username },
+        });
+        loginAttempts.delete(attemptKey);
+        await recordAuditEvent(fastify, {
+          userId: userRow.id,
+          eventType: "auth:register",
+          ipAddress: request.ip,
+          metadata: {
+            username: userRow.username,
+          },
+        });
+        return;
+      } catch (err) {
+        fastify.log.error(
+          { err },
+          "Failed to login with JSON database; falling back to PostgreSQL."
+        );
+      }
+    }
+
+    // Try PostgreSQL database if available
     if (fastify.db) {
       try {
         await purgeExpiredSessions(fastify.db);
@@ -119,16 +210,23 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
             user: { id: existing.id, username: existing.username },
           });
           loginAttempts.delete(attemptKey);
+          await recordAuditEvent(fastify, {
+            userId: existing.id,
+            eventType: "auth:login",
+            ipAddress: request.ip,
+            metadata: {
+              username: existing.username,
+              method: body.password ? "password" : "keyfile",
+            },
+          });
           return;
         }
 
         if (!body.password && !body.keyfileToken) {
           recordFailure(attemptKey);
-          reply
-            .code(400)
-            .send({
-              error: { code: "bad_request", message: "Provide a password or keyfileToken" },
-            });
+          reply.code(400).send({
+            error: { code: "bad_request", message: "Provide a password or keyfileToken" },
+          });
           return;
         }
 
@@ -143,18 +241,52 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
           user: { id: userRow.id, username: userRow.username },
         });
         loginAttempts.delete(attemptKey);
+        await recordAuditEvent(fastify, {
+          userId: userRow.id,
+          eventType: "auth:register",
+          ipAddress: request.ip,
+          metadata: {
+            username: userRow.username,
+          },
+        });
         return;
       } catch (err) {
         fastify.log.error({ err }, "Failed to login with database; falling back to memory store.");
       }
     }
 
+    // Fall back to in-memory store if no database
+    const users = (store as any).users as Map<
+      string,
+      { username: string; passwordHash: string; isAdmin: boolean }
+    >;
+    if (users) {
+      const user = users.get(body.username);
+      if (user && body.password) {
+        const crypto = await import("node:crypto");
+        const providedHash = crypto.createHash("sha256").update(body.password).digest("hex");
+        if (user.passwordHash === providedHash) {
+          const session = createSession(body.username);
+          reply.code(200).send({ token: session.token });
+          return;
+        }
+      }
+    }
+    // Fall back to old demo behavior
     const session = createSession(body.username);
     reply.send({
       token: session.token,
       user: { id: session.userId, username: session.username },
     });
     loginAttempts.delete(attemptKey);
+    await recordAuditEvent(fastify, {
+      userId: session.userId,
+      eventType: "auth:login_memory",
+      ipAddress: request.ip,
+      metadata: {
+        username: session.username,
+      },
+    });
   });
 
   fastify.get("/session", async (request, reply) => {
@@ -169,18 +301,41 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/logout", async (request, reply) => {
     const session = await requireSession(request, reply);
     if (!session) return;
-    if (fastify.db) {
+
+    if (fastify.jsonDb) {
+      try {
+        await jsonAuthRepo.deleteSession(fastify.jsonDb, session.token);
+        reply.code(204).send();
+      } catch (err) {
+        fastify.log.error(
+          { err },
+          "Failed to delete session in JSON database; removing from memory."
+        );
+        store.sessions.delete(session.token);
+        reply.code(204).send();
+      }
+    } else if (fastify.db) {
       try {
         await dbDeleteSession(fastify.db, session.token);
         reply.code(204).send();
-        return;
       } catch (err) {
         fastify.log.error({ err }, "Failed to delete session in database; removing from memory.");
+        store.sessions.delete(session.token);
+        reply.code(204).send();
       }
+    } else {
+      store.sessions.delete(session.token);
+      reply.code(204).send();
     }
 
-    store.sessions.delete(session.token);
-    reply.code(204).send();
+    await recordAuditEvent(fastify, {
+      userId: session.userId,
+      eventType: "auth:logout",
+      ipAddress: request.ip,
+      metadata: {
+        username: session.username,
+      },
+    });
   });
 };
 
