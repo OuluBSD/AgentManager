@@ -1,4 +1,5 @@
 # Templates
+
 Draft templates used to validate the JSON-before-stop protocol and meta-chat aggregation.
 
 - `examples/status-template.json` – chat-level template with required JSON status.

@@ -2,7 +2,18 @@ import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@nexus/shared/db/schema";
-import type { Chat, Message, MetaChat, Project, RoadmapList, Snapshot, Template } from "../types";
+import type {
+  Chat,
+  Message,
+  MetaChat,
+  MetaChatMessage,
+  Project,
+  RoadmapList,
+  Snapshot,
+  Template,
+} from "../types";
+import { aggregateChildChats } from "./metaChatAggregator";
+import { eventBus } from "./eventBus";
 
 export type Database = NodePgDatabase<typeof schema>;
 
@@ -11,6 +22,7 @@ type RoadmapInput = Partial<RoadmapList>;
 type ChatInput = Partial<Chat>;
 type TemplateInput = Partial<Template>;
 type MessageInput = Pick<Message, "role" | "content" | "metadata">;
+type MetaChatMessageInput = Pick<MetaChatMessage, "role" | "content" | "metadata">;
 
 const UUID_REGEX = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
@@ -94,6 +106,17 @@ function mapMessage(row: typeof schema.messages.$inferSelect): Message {
     id: row.id.toString(),
     chatId: row.chatId,
     role: (row.role as Message["role"]) ?? "user",
+    content: row.content,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? undefined,
+    createdAt: row.createdAt?.toISOString?.() ?? new Date().toISOString(),
+  };
+}
+
+function mapMetaChatMessage(row: typeof schema.metaChatMessages.$inferSelect): MetaChatMessage {
+  return {
+    id: row.id.toString(),
+    metaChatId: row.metaChatId,
+    role: (row.role as MetaChatMessage["role"]) ?? "user",
     content: row.content,
     metadata: (row.metadata as Record<string, unknown> | null) ?? undefined,
     createdAt: row.createdAt?.toISOString?.() ?? new Date().toISOString(),
@@ -380,22 +403,15 @@ export async function dbSyncMetaFromChats(
   db: Database,
   roadmapId: string
 ): Promise<MetaChat | null> {
-  const chats = await db
-    .select()
-    .from(schema.chats)
-    .where(eq(schema.chats.roadmapListId, roadmapId));
-  const progress =
-    chats.length === 0
-      ? 0
-      : chats.reduce((sum, chat) => sum + Number(chat.progress ?? 0), 0) / chats.length;
-  const status = deriveStatus(chats.map((chat) => chat.status ?? "in_progress"));
+  // Use the new aggregation service for better summary generation
+  const aggregated = await aggregateChildChats(db, roadmapId);
 
   const [metaRow] = await db
     .update(schema.metaChats)
     .set({
-      progress: String(progress),
-      status,
-      summary: `Aggregated from ${chats.length} chats`,
+      progress: String(aggregated.progress),
+      status: aggregated.status,
+      summary: aggregated.summary,
       updatedAt: new Date(),
     })
     .where(eq(schema.metaChats.roadmapListId, roadmapId))
@@ -403,8 +419,19 @@ export async function dbSyncMetaFromChats(
 
   await db
     .update(schema.roadmapLists)
-    .set({ progress: String(progress), status, updatedAt: new Date() })
+    .set({
+      progress: String(aggregated.progress),
+      status: aggregated.status,
+      updatedAt: new Date(),
+    })
     .where(eq(schema.roadmapLists.id, roadmapId));
+
+  // Emit event for real-time WebSocket notifications
+  eventBus.emitMetaChatUpdated(roadmapId, {
+    status: aggregated.status,
+    progress: aggregated.progress,
+    summary: aggregated.summary,
+  });
 
   return metaRow ? mapMetaChat(metaRow) : null;
 }
@@ -435,6 +462,35 @@ export async function dbGetMessages(db: Database, chatId: string): Promise<Messa
   return rows.map(mapMessage);
 }
 
+export async function dbAddMetaChatMessage(
+  db: Database,
+  metaChatId: string,
+  payload: MetaChatMessageInput
+): Promise<MetaChatMessage> {
+  const [row] = await db
+    .insert(schema.metaChatMessages)
+    .values({
+      metaChatId,
+      role: payload.role,
+      content: payload.content,
+      metadata: payload.metadata,
+    })
+    .returning();
+  return mapMetaChatMessage(row);
+}
+
+export async function dbGetMetaChatMessages(
+  db: Database,
+  metaChatId: string
+): Promise<MetaChatMessage[]> {
+  const rows = await db
+    .select()
+    .from(schema.metaChatMessages)
+    .where(eq(schema.metaChatMessages.metaChatId, metaChatId))
+    .orderBy(schema.metaChatMessages.createdAt);
+  return rows.map(mapMetaChatMessage);
+}
+
 export async function dbAddSnapshot(
   db: Database,
   projectId: string,
@@ -457,6 +513,24 @@ export async function dbListSnapshots(db: Database, projectId: string): Promise<
     .from(schema.snapshots)
     .where(eq(schema.snapshots.projectId, projectId));
   return rows.map(mapSnapshot);
+}
+
+export async function dbRestoreProject(
+  db: Database,
+  payload: ProjectInput & { id: string }
+): Promise<Project> {
+  const [row] = await db
+    .insert(schema.projects)
+    .values({
+      id: payload.id, // Explicitly set the ID
+      name: payload.name ?? "Untitled Project",
+      description: payload.description,
+      category: payload.category,
+      status: payload.status ?? "active",
+      theme: payload.theme as Record<string, unknown> | undefined,
+    })
+    .returning();
+  return mapProject(row);
 }
 
 export async function dbProjectDetails(db: Database, projectId: string) {

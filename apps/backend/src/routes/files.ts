@@ -12,7 +12,9 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
     if (!session) return;
     const query = request.query as { projectId?: string; path?: string };
     if (!query.projectId) {
-      reply.code(400).send({ error: { code: "missing_project", message: "projectId is required" } });
+      reply
+        .code(400)
+        .send({ error: { code: "missing_project", message: "projectId is required" } });
       return;
     }
 
@@ -32,7 +34,9 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const stats = await fs.stat(safePath.absolutePath);
       if (!stats.isDirectory()) {
-        reply.code(400).send({ error: { code: "not_directory", message: "Path is not a directory" } });
+        reply
+          .code(400)
+          .send({ error: { code: "not_directory", message: "Path is not a directory" } });
         return;
       }
       const entries = await fs.readdir(safePath.absolutePath, { withFileTypes: true });
@@ -66,7 +70,9 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
     if (!session) return;
     const query = request.query as { projectId?: string; path?: string };
     if (!query.projectId || !query.path) {
-      reply.code(400).send({ error: { code: "missing_params", message: "projectId and path are required" } });
+      reply
+        .code(400)
+        .send({ error: { code: "missing_params", message: "projectId and path are required" } });
       return;
     }
 
@@ -112,9 +118,16 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/fs/write", async (request, reply) => {
     const session = await requireSession(request, reply);
     if (!session) return;
-    const body = request.body as { projectId?: string; path: string; content: string; baseSha?: string };
+    const body = request.body as {
+      projectId?: string;
+      path: string;
+      content: string;
+      baseSha?: string;
+    };
     if (!body?.projectId || !body?.path) {
-      reply.code(400).send({ error: { code: "missing_params", message: "projectId and path are required" } });
+      reply
+        .code(400)
+        .send({ error: { code: "missing_params", message: "projectId and path are required" } });
       return;
     }
 
@@ -158,9 +171,16 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/fs/diff", async (request, reply) => {
     const session = await requireSession(request, reply);
     if (!session) return;
-    const query = request.query as { projectId?: string; path?: string; baseSha?: string; targetSha?: string };
+    const query = request.query as {
+      projectId?: string;
+      path?: string;
+      baseSha?: string;
+      targetSha?: string;
+    };
     if (!query.projectId || !query.path) {
-      reply.code(400).send({ error: { code: "missing_params", message: "projectId and path are required" } });
+      reply
+        .code(400)
+        .send({ error: { code: "missing_params", message: "projectId and path are required" } });
       return;
     }
 

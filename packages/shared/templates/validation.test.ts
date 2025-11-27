@@ -3,7 +3,11 @@ import { parseStatusPayload } from "./validation";
 
 describe("parseStatusPayload", () => {
   it("parses a valid status payload", () => {
-    const payload = parseStatusPayload({ status: "waiting", progress: 0.3, focus: "scaffold backend" });
+    const payload = parseStatusPayload({
+      status: "waiting",
+      progress: 0.3,
+      focus: "scaffold backend",
+    });
     expect(payload.status).toBe("waiting");
     expect(payload.progress).toBe(0.3);
     expect(payload.focus).toBe("scaffold backend");

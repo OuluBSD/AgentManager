@@ -315,6 +315,36 @@ test("chat merge endpoint moves messages and removes the source chat", async () 
     assert.ok(roadmapRow);
     assert.equal(Number(roadmapRow?.progress ?? 0), 0.8);
     assert.equal(roadmapRow?.status, "in_progress");
+
+    // Test chat status endpoint
+    const chatStatusRes = await app.inject({
+      method: "POST",
+      url: `/chats/${targetChatId}/status`,
+      headers: { "x-session-token": session.token },
+      payload: { status: "done", progress: 1.0, focus: "completed task" },
+    });
+    assert.equal(chatStatusRes.statusCode, 200);
+    const updatedChat = chatStatusRes.json() as {
+      id: string;
+      status: string;
+      progress: number;
+      metadata?: { focus: string };
+    };
+    assert.equal(updatedChat.status, "done");
+    assert.equal(updatedChat.progress, 1.0);
+    assert.equal(updatedChat.metadata?.focus, "completed task");
+
+    // Verify the change updated the roadmap meta as well
+    const updatedMetaRes = await app.inject({
+      method: "GET",
+      url: `/roadmaps/${roadmap.id}/status`,
+      headers: { "x-session-token": session.token },
+    });
+    assert.equal(updatedMetaRes.statusCode, 200);
+    const updatedMeta = updatedMetaRes.json() as { status: string; progress: number };
+    // Should be updated based on the new chat status
+    assert.equal(updatedMeta.status, "done");
+    assert.equal(updatedMeta.progress, 1.0); // Progress should be 1.0 (100%) since that's the value after sync
   } finally {
     await app.close();
     await client.close();

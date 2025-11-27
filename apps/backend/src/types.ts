@@ -57,6 +57,15 @@ export type MetaChat = {
   summary?: string;
 };
 
+export type MetaChatMessage = {
+  id: string;
+  metaChatId: string;
+  role: "user" | "assistant" | "system" | "status";
+  content: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type Snapshot = {
   id: string;
   projectId: string;

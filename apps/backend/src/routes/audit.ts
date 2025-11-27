@@ -67,13 +67,20 @@ export const auditRoutes: FastifyPluginAsync = async (fastify) => {
       whereClauses.push(ilike(schema.auditEvents.path, `%${query.pathContains}%`));
     }
     if (beforeDate && !Number.isNaN(beforeDate.getTime())) {
-      whereClauses.push(orderDirection === "asc" ? lt(schema.auditEvents.createdAt, beforeDate) : lt(schema.auditEvents.createdAt, beforeDate));
+      whereClauses.push(
+        orderDirection === "asc"
+          ? lt(schema.auditEvents.createdAt, beforeDate)
+          : lt(schema.auditEvents.createdAt, beforeDate)
+      );
     } else if (cursorDate && cursorId && !Number.isNaN(cursorDate.getTime())) {
       const comparison = orderDirection === "asc" ? gt : lt;
       whereClauses.push(
         or(
           comparison(schema.auditEvents.createdAt, cursorDate),
-          and(eq(schema.auditEvents.createdAt, cursorDate), comparison(schema.auditEvents.id, cursorId))
+          and(
+            eq(schema.auditEvents.createdAt, cursorDate),
+            comparison(schema.auditEvents.id, cursorId)
+          )
         )
       );
     }
@@ -87,7 +94,9 @@ export const auditRoutes: FastifyPluginAsync = async (fastify) => {
     const events = hasMore ? rows.slice(0, pageSize) : rows;
     const last = events[events.length - 1];
     const nextCursor =
-      hasMore && events.length && last?.createdAt ? `${last.createdAt.toISOString()}|${last.id}` : undefined;
+      hasMore && events.length && last?.createdAt
+        ? `${last.createdAt.toISOString()}|${last.id}`
+        : undefined;
 
     reply.send({
       events,

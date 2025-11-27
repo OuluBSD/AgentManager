@@ -36,21 +36,21 @@ export class GitStorage {
   /**
    * Get the root directory for a project
    */
-  private getProjectRoot(projectId: string): string {
+  getProjectRoot(projectId: string): string {
     return path.join(this.config.projectsRoot, projectId);
   }
 
   /**
    * Get the directory for a roadmap
    */
-  private getRoadmapDir(projectId: string, roadmapId: string): string {
+  getRoadmapDir(projectId: string, roadmapId: string): string {
     return path.join(this.getProjectRoot(projectId), "roadmaps", roadmapId);
   }
 
   /**
    * Get the directory for a chat
    */
-  private getChatDir(projectId: string, roadmapId: string, chatId: string): string {
+  getChatDir(projectId: string, roadmapId: string, chatId: string): string {
     return path.join(this.getRoadmapDir(projectId, roadmapId), "chats", chatId);
   }
 
@@ -59,6 +59,13 @@ export class GitStorage {
    */
   getChatWorkspace(projectId: string, roadmapId: string, chatId: string): string {
     return path.join(this.getChatDir(projectId, roadmapId, chatId), "workspace");
+  }
+
+  /**
+   * Get the directory for templates in a project
+   */
+  getTemplateDir(projectId: string): string {
+    return path.join(this.getProjectRoot(projectId), "templates");
   }
 
   /**

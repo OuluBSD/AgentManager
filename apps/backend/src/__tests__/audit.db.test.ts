@@ -54,7 +54,12 @@ function withTempProjectsRoot() {
   const original = process.env.PROJECTS_ROOT;
   const root = mkdtempSync(path.join(tmpdir(), "nexus-audit-db-"));
   process.env.PROJECTS_ROOT = root;
-  return { root, restoreEnv: () => { process.env.PROJECTS_ROOT = original; } };
+  return {
+    root,
+    restoreEnv: () => {
+      process.env.PROJECTS_ROOT = original;
+    },
+  };
 }
 
 test("terminal routes persist audit events when db is configured", async () => {

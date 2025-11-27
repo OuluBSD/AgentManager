@@ -98,7 +98,7 @@ test("terminal stream accepts connections with a valid token and emits ready not
     const messages: string[] = [];
     await new Promise<void>((resolve, reject) => {
       socket.onmessage = (evt) => {
-        const data = typeof evt.data === "string" ? evt.data : evt.data?.toString?.() ?? "";
+        const data = typeof evt.data === "string" ? evt.data : (evt.data?.toString?.() ?? "");
         messages.push(data);
         socket.close();
       };

@@ -192,6 +192,32 @@ You will need:
 - configured project directories
 - database setup (Drizzle/Postgres)
 
+AI Integration (Optional):
+
+For AI-powered meta-chat clarifications, install the **managed-gemini-cli** fork:
+
+```bash
+# Clone the OuluBSD fork (includes TCP server mode)
+git clone git@github.com:OuluBSD/managed-gemini-cli.git ~/managed-gemini-cli
+cd ~/managed-gemini-cli
+npm install
+npm run bundle
+npm install -g .
+
+# Authenticate with Google
+gemini
+```
+
+Then enable in `.env`:
+
+```bash
+ENABLE_AI=true
+GEMINI_CLI_PATH=gemini
+```
+
+**Note:** The standard `@google/gemini-cli` from npm does NOT work. You must use the OuluBSD fork.
+See [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md) for full details.
+
 Tests:
 
 ```bash
@@ -245,7 +271,7 @@ Frontend ↔ Backend:
 
 # 📄 License
 
-TBD
+MIT License
 
 ---
 

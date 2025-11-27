@@ -22,21 +22,7 @@ async function resolveSession(
   fastify: FastifyInstance & { db?: Database; jsonDb?: JsonDatabase },
   token: string
 ) {
-  // Try PostgreSQL database first
-  if (fastify.db) {
-    try {
-      await pgPurgeExpiredSessions(fastify.db);
-      const session = await pgGetSessionWithUser(fastify.db, token);
-      if (session) return session;
-    } catch (err) {
-      fastify.log.error(
-        { err },
-        "Failed to resolve session from PostgreSQL; trying JSON database."
-      );
-    }
-  }
-
-  // Try JSON database
+  // Try JSON database first (if available)
   if (fastify.jsonDb) {
     try {
       await jsonPurgeExpiredSessions(fastify.jsonDb);
@@ -45,7 +31,21 @@ async function resolveSession(
     } catch (err) {
       fastify.log.error(
         { err },
-        "Failed to resolve session from JSON database; checking memory store."
+        "Failed to resolve session from JSON database; trying PostgreSQL."
+      );
+    }
+  }
+
+  // Try PostgreSQL database
+  if (fastify.db) {
+    try {
+      await pgPurgeExpiredSessions(fastify.db);
+      const session = await pgGetSessionWithUser(fastify.db, token);
+      if (session) return session;
+    } catch (err) {
+      fastify.log.error(
+        { err },
+        "Failed to resolve session from PostgreSQL; checking memory store."
       );
     }
   }

@@ -11,7 +11,10 @@ export const statusSchema = z.object({
 
 export type StatusPayload = z.infer<typeof statusSchema>;
 
-export function parseStatusPayload(payload: unknown, opts?: { requireProgress?: boolean }): StatusPayload {
+export function parseStatusPayload(
+  payload: unknown,
+  opts?: { requireProgress?: boolean }
+): StatusPayload {
   const parsed = statusSchema.parse(payload);
   if (opts?.requireProgress && parsed.progress === undefined) {
     throw new Error("progress is required when JSON-before-stop is enabled");

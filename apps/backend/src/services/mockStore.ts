@@ -3,6 +3,7 @@ import type {
   Chat,
   Message,
   MetaChat,
+  MetaChatMessage,
   Project,
   RoadmapList,
   Session,
@@ -10,6 +11,7 @@ import type {
   Template,
   TerminalSession,
 } from "../types";
+import { eventBus } from "./eventBus";
 
 type Store = {
   projects: Map<string, Project>;
@@ -17,6 +19,7 @@ type Store = {
   chats: Map<string, Chat>;
   metaChats: Map<string, MetaChat>;
   messages: Map<string, Message[]>;
+  metaChatMessages: Map<string, MetaChatMessage[]>;
   templates: Map<string, Template>;
   snapshots: Map<string, Snapshot[]>;
   sessions: Map<string, Session>;
@@ -29,6 +32,7 @@ export const store: Store = {
   chats: new Map(),
   metaChats: new Map(),
   messages: new Map(),
+  metaChatMessages: new Map(),
   templates: new Map(),
   snapshots: new Map(),
   sessions: new Map(),
@@ -198,6 +202,10 @@ export function updateRoadmap(roadmapId: string, patch: Partial<RoadmapList>) {
   return next;
 }
 
+export function getRoadmap(roadmapId: string) {
+  return store.roadmapLists.get(roadmapId) ?? null;
+}
+
 export function getMetaChat(roadmapId: string) {
   const match = Array.from(store.metaChats.values()).find((m) => m.roadmapListId === roadmapId);
   return match ?? null;
@@ -240,6 +248,45 @@ export function syncRoadmapMeta(roadmapId: string) {
       ? 0
       : chats.reduce((sum, chat) => sum + (chat.progress ?? 0), 0) / chats.length;
   const status = deriveStatus(chats.map((chat) => chat.status ?? "in_progress"));
+  const summary = `Aggregated from ${chats.length} chats`;
+
+  const meta = getMetaChat(roadmapId);
+  if (meta) {
+    store.metaChats.set(meta.id, {
+      ...meta,
+      progress,
+      status,
+      summary,
+    });
+  }
+  const roadmap = store.roadmapLists.get(roadmapId);
+  if (roadmap) {
+    store.roadmapLists.set(roadmapId, { ...roadmap, progress, status });
+  }
+
+  // Emit event for real-time WebSocket notifications
+  eventBus.emitMetaChatUpdated(roadmapId, {
+    status,
+    progress,
+    summary,
+  });
+}
+
+/**
+ * Synchronize meta chat status from child chat statuses.
+ * This function aggregates the status and progress of all chats in a roadmap
+ * and updates the associated meta chat with the calculated values.
+ *
+ * @param roadmapId - The ID of the roadmap whose chats to aggregate
+ * @returns Updated meta chat object or null if not found
+ */
+export function syncMetaFromChats(roadmapId: string) {
+  const chats = listChats(roadmapId);
+  const progress =
+    chats.length === 0
+      ? 0
+      : chats.reduce((sum, chat) => sum + (chat.progress ?? 0), 0) / chats.length;
+  const status = deriveStatus(chats.map((chat) => chat.status ?? "in_progress"));
   const meta = getMetaChat(roadmapId);
   if (meta) {
     store.metaChats.set(meta.id, {
@@ -248,11 +295,9 @@ export function syncRoadmapMeta(roadmapId: string) {
       status,
       summary: `Aggregated from ${chats.length} chats`,
     });
+    return { ...meta, progress, status, summary: `Aggregated from ${chats.length} chats` };
   }
-  const roadmap = store.roadmapLists.get(roadmapId);
-  if (roadmap) {
-    store.roadmapLists.set(roadmapId, { ...roadmap, progress, status });
-  }
+  return null;
 }
 
 export function createChat(roadmapListId: string, payload: Partial<Chat>) {
@@ -315,6 +360,24 @@ export function getMessages(chatId: string) {
   return store.messages.get(chatId) ?? [];
 }
 
+export function addMetaChatMessage(
+  metaChatId: string,
+  message: Omit<MetaChatMessage, "id" | "createdAt">
+) {
+  const messages = store.metaChatMessages.get(metaChatId) ?? [];
+  const nextMessage: MetaChatMessage = {
+    ...message,
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+  };
+  store.metaChatMessages.set(metaChatId, [...messages, nextMessage]);
+  return nextMessage;
+}
+
+export function getMetaChatMessages(metaChatId: string) {
+  return store.metaChatMessages.get(metaChatId) ?? [];
+}
+
 export function listTemplates() {
   return Array.from(store.templates.values());
 }
@@ -347,6 +410,41 @@ export function updateTemplate(templateId: string, patch: Partial<Template>) {
   return next;
 }
 
+/**
+ * Restore a project from git storage with a specific ID.
+ * This function either updates an existing project or creates a new one with the specified ID.
+ * Used for disaster recovery when git storage exists but database is lost.
+ *
+ * @param payload - Project data with a specific ID to restore
+ * @returns The restored project object
+ */
+export function restoreProject(payload: Partial<Project> & { id: string }) {
+  // Check if project already exists in store
+  const existing = getProject(payload.id);
+  if (existing) {
+    // Update existing project
+    return updateProject(payload.id, {
+      name: payload.name,
+      description: payload.description,
+      category: payload.category,
+      status: payload.status,
+      theme: payload.theme,
+    });
+  } else {
+    // Add new project with the specific ID
+    const project: Project = {
+      id: payload.id,
+      name: payload.name ?? "Untitled Project",
+      description: payload.description,
+      category: payload.category,
+      status: payload.status ?? "active",
+      theme: payload.theme,
+    };
+    store.projects.set(project.id, project);
+    return project;
+  }
+}
+
 export function addSnapshot(projectId: string, gitSha: string, message?: string) {
   const snapshot: Snapshot = {
     id: crypto.randomUUID(),
@@ -362,6 +460,20 @@ export function addSnapshot(projectId: string, gitSha: string, message?: string)
 
 export function listSnapshots(projectId: string) {
   return store.snapshots.get(projectId) ?? [];
+}
+
+/**
+ * Get project details including the project object and its roadmap lists.
+ * This function provides detailed information about a project and all its associated roadmaps.
+ *
+ * @param projectId - The ID of the project to retrieve details for
+ * @returns Object containing project and its roadmap lists, or null if project not found
+ */
+export function projectDetails(projectId: string) {
+  const project = getProject(projectId);
+  if (!project) return null;
+  const roadmapLists = listRoadmaps(projectId);
+  return { project, roadmapLists };
 }
 
 export function createTerminalSession(projectId?: string, cwd?: string) {

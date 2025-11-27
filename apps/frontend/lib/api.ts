@@ -261,6 +261,32 @@ export async function postChatMessage(
   return res.json();
 }
 
+export async function fetchMetaChatMessages(
+  token: string,
+  metaChatId: string
+): Promise<{ id: string; metaChatId: string; role: string; content: string; createdAt: string }[]> {
+  return fetchWithAuth(token, `/api/meta-chats/${metaChatId}/messages`);
+}
+
+export async function postMetaChatMessage(
+  token: string,
+  metaChatId: string,
+  payload: { role: "user" | "assistant" | "system" | "status"; content: string }
+): Promise<{ id: string }> {
+  const res = await fetch(`${API_BASE}/api/meta-chats/${metaChatId}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to append meta-chat message (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function updateChatStatus(
   token: string,
   chatId: string,

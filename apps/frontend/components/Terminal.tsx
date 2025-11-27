@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // Dynamic imports to avoid SSR issues
 let XTermClass: typeof import("@xterm/xterm").Terminal | null = null;
@@ -28,13 +28,6 @@ export function Terminal({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isAttached, setIsAttached] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // useEffect to trigger auto-connect
-  useEffect(() => {
-    if (autoConnect && sessionToken && projectId && !isAttached) {
-      handlePlay();
-    }
-  }, [autoConnect, sessionToken, projectId, isAttached, handlePlay]);
 
   // Create terminal session
   const createSession = async () => {
@@ -226,6 +219,13 @@ export function Terminal({
       attachSession(sessionId);
     }
   }, [sessionId, createSession, isAttached, attachSession]);
+
+  // useEffect to trigger auto-connect
+  useEffect(() => {
+    if (autoConnect && sessionToken && projectId && !isAttached) {
+      handlePlay();
+    }
+  }, [autoConnect, sessionToken, projectId, isAttached, handlePlay]);
 
   const handleStop = () => {
     detachSession();

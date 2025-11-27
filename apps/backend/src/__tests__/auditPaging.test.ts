@@ -47,7 +47,8 @@ class FakeBuilder {
 
   then(resolve: (value: AuditRow[]) => void, reject?: (err: unknown) => void) {
     try {
-      const output = typeof this.limitValue === "number" ? this.rows.slice(0, this.limitValue) : this.rows;
+      const output =
+        typeof this.limitValue === "number" ? this.rows.slice(0, this.limitValue) : this.rows;
       resolve(output);
     } catch (err) {
       reject?.(err);
@@ -108,7 +109,10 @@ test("marks hasMore=false when result count equals requested page size", async (
   });
 
   assert.equal(res.statusCode, 200);
-  const payload = res.json() as { events: AuditRow[]; paging: { hasMore: boolean; nextCursor?: string } };
+  const payload = res.json() as {
+    events: AuditRow[];
+    paging: { hasMore: boolean; nextCursor?: string };
+  };
   assert.equal(payload.events.length, 2);
   assert.equal(payload.paging.hasMore, false);
   assert.ok(!payload.paging.nextCursor);
@@ -134,7 +138,10 @@ test("uses trimmed rows for cursor and hasMore when more data exists", async () 
   });
 
   assert.equal(res.statusCode, 200);
-  const payload = res.json() as { events: AuditRow[]; paging: { hasMore: boolean; nextCursor?: string } };
+  const payload = res.json() as {
+    events: AuditRow[];
+    paging: { hasMore: boolean; nextCursor?: string };
+  };
   assert.equal(payload.events.length, 2);
   assert.equal(payload.paging.hasMore, true);
   assert.equal(payload.paging.nextCursor, `${rows[1].createdAt.toISOString()}|${rows[1].id}`);
@@ -143,8 +150,22 @@ test("uses trimmed rows for cursor and hasMore when more data exists", async () 
 
 test("builds filter clauses for project, type, user, and path", async () => {
   const rows: AuditRow[] = [
-    { id: "a", eventType: "fs:read", createdAt: new Date("2024-01-01T00:00:00Z"), projectId: "proj-1", userId: "u1", path: "/a.txt" },
-    { id: "b", eventType: "fs:write", createdAt: new Date("2024-01-01T00:00:01Z"), projectId: "proj-2", userId: "u2", path: "/b.txt" },
+    {
+      id: "a",
+      eventType: "fs:read",
+      createdAt: new Date("2024-01-01T00:00:00Z"),
+      projectId: "proj-1",
+      userId: "u1",
+      path: "/a.txt",
+    },
+    {
+      id: "b",
+      eventType: "fs:write",
+      createdAt: new Date("2024-01-01T00:00:01Z"),
+      projectId: "proj-2",
+      userId: "u2",
+      path: "/b.txt",
+    },
   ];
   const app = Fastify({ logger: false }) as FastifyInstance & { db: FakeDb };
   app.db = new FakeDb(rows);

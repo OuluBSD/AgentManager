@@ -12,7 +12,12 @@ function withTempProjectsRoot() {
   const original = process.env.PROJECTS_ROOT;
   const root = mkdtempSync(path.join(tmpdir(), "nexus-fs-"));
   process.env.PROJECTS_ROOT = root;
-  return { root, restoreEnv: () => { process.env.PROJECTS_ROOT = original; } };
+  return {
+    root,
+    restoreEnv: () => {
+      process.env.PROJECTS_ROOT = original;
+    },
+  };
 }
 
 test("file routes emit audit metadata for tree and read", async () => {
@@ -66,7 +71,10 @@ test("file routes emit audit metadata for tree and read", async () => {
     assert.equal(readRes.statusCode, 200);
     const readLog = logs.find((log) => (log.obj as any)?.audit?.eventType === "fs:read");
     assert.ok(readLog, "read audit payload captured");
-    assert.equal((readLog!.obj as any).audit.metadata?.bytes, Buffer.byteLength("hello world", "utf8"));
+    assert.equal(
+      (readLog!.obj as any).audit.metadata?.bytes,
+      Buffer.byteLength("hello world", "utf8")
+    );
     assert.equal((readLog!.obj as any).audit.metadata?.truncated, false);
     assert.equal((readLog!.obj as any).audit.metadata?.ip, ip);
   } finally {

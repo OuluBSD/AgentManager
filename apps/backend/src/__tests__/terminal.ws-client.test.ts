@@ -123,7 +123,9 @@ test("terminal websocket stays open when idle timer is disabled", async () => {
       };
       socket.onclose = (event: any) => {
         clearTimeout(timer);
-        reject(new Error(`socket closed early (${event.code}${event.reason ? `: ${event.reason}` : ""})`));
+        reject(
+          new Error(`socket closed early (${event.code}${event.reason ? `: ${event.reason}` : ""})`)
+        );
       };
       socket.onerror = (err: unknown) => {
         clearTimeout(timer);

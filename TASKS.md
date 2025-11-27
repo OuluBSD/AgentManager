@@ -218,12 +218,66 @@ Implement DB models + TypeScript interfaces:
 
 ## 12. Meta-Chat System
 
-- [ ] One meta-chat per roadmap list
-- [ ] Special layout style in chat list
-- [ ] Ability to run pure JS logic
-- [ ] Ability to request AI clarifications
-- [ ] Aggregates child chat JSON statuses
-- [ ] Publishes progress & summary to roadmap list
+- [x] One meta-chat per roadmap list
+- [x] Special layout style in chat list
+- [x] Meta-chat message storage (database + JSONL)
+- [x] API endpoints for meta-chat messages (GET/POST)
+- [x] Frontend UI integration for viewing/sending meta-chat messages
+- [x] Aggregates child chat JSON statuses
+- [x] Publishes progress & summary to roadmap list
+- [x] Auto-update meta-chat with child chat status changes
+  - [x] Event bus system for real-time notifications
+  - [x] WebSocket endpoint for meta-chat updates (`/roadmaps/:roadmapId/meta-chat/stream`)
+  - [x] Event emission after meta-chat sync (database and memory store)
+  - [x] Real-time message broadcasting
+  - [x] Frontend WebSocket client integration
+    - [x] `useMetaChatWebSocket` hook for subscribing to updates
+    - [x] Real-time roadmap status/progress updates in UI
+    - [x] Real-time meta-chat message updates
+    - [x] Auto-reconnection with exponential backoff
+    - [x] Ping/pong keep-alive mechanism
+- [x] Ability to request AI clarifications from meta-chat
+  - [x] AI clarification service (`apps/backend/src/services/aiClarification.ts`)
+  - [x] API endpoint (`POST /meta-chats/:metaChatId/clarify`)
+  - [x] Context-aware placeholder responses
+  - [x] Full AI integration (Gemini CLI via TCP)
+- [ ] Ability to run pure JS logic from meta-chat
+  - [ ] Sandboxed JavaScript execution environment
+  - [ ] Safe expression evaluation
+
+**Implementation Notes (Meta-Chat Auto-Update):**
+
+Backend Implementation:
+
+- Implemented event bus (`apps/backend/src/services/eventBus.ts`) using Node.js EventEmitter for application-level event broadcasting
+- Added WebSocket endpoint at `/roadmaps/:roadmapId/meta-chat/stream` with authentication, initial status delivery, and subscription management
+- Integrated event emission into `dbSyncMetaFromChats` (database) and `syncRoadmapMeta` (memory store) to broadcast updates after aggregation
+- WebSocket clients receive real-time notifications for meta-chat status updates and new messages with proper filtering by roadmap
+- Created AI clarification service with placeholder implementation demonstrating API structure and context-aware responses
+- Added `/meta-chats/:metaChatId/clarify` endpoint for requesting AI assistance with meta-chat questions
+- All operations include comprehensive audit logging
+- Full test coverage maintained (95 tests passing)
+
+Frontend Implementation:
+
+- Created `useMetaChatWebSocket` hook (`apps/frontend/hooks/useMetaChatWebSocket.ts`) for subscribing to real-time meta-chat updates
+- Hook features auto-connection, auto-reconnection with exponential backoff (max 30s), and ping/pong keep-alive
+- Integrated WebSocket subscription into main workspace page with callbacks for status and message updates
+- Real-time updates automatically refresh roadmap status/progress in the Roadmaps column
+- Real-time message notifications automatically append to meta-chat message stream when viewing meta-chat
+- Connection lifecycle properly managed with cleanup on unmount and dependency changes
+- Frontend build and e2e tests passing (2/2 Playwright tests)
+
+AI Integration Implementation:
+
+- Created Gemini TCP client service (`apps/backend/src/services/geminiClient.ts`) for communicating with gemini-cli
+- Implemented full TCP protocol support with newline-delimited JSON messages (init, conversation, status, error)
+- Client features automatic process spawning, connection lifecycle management, and streaming response support
+- Integrated Gemini client into `aiClarification.ts` service with singleton pattern and graceful fallback
+- AI-powered responses include roadmap context, meta-chat history, and actionable suggestions
+- Environment-based configuration: ENABLE_AI, GEMINI_CLI_PATH, GEMINI_TCP_PORT, GEMINI_MODEL
+- AI integration is opt-in via ENABLE_AI=true flag, falls back to placeholder responses when disabled
+- All 95 backend tests passing, no regressions introduced
 
 ---
 
@@ -393,9 +447,17 @@ Implement DB models + TypeScript interfaces:
 - [x] Login screen UI
 - [x] Password or keyfile auth
 - [x] Session management
+- [x] Audit logs for agent activity
+  - [x] Project operations (create/update)
+  - [x] Roadmap operations (create/update)
+  - [x] Chat operations (create/update/merge/messages/status)
+  - [x] Meta-chat message operations
+  - [x] Template operations (create/update)
+  - [x] Auth operations (login/logout/register)
+  - [x] File operations (tree/read/write/diff)
+  - [x] Terminal operations (create/input/exit)
 - [ ] OS user mapping + virtual user registry
 - [ ] Permissions scaffold
-- [ ] Audit logs for agent activity
 
 ---
 

@@ -206,7 +206,10 @@ test("idle timeout can be disabled with TERMINAL_IDLE_MS=0", async () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 60));
-    assert.ok(getTerminalSession(terminalSessionId!), "session should remain when idle is disabled");
+    assert.ok(
+      getTerminalSession(terminalSessionId!),
+      "session should remain when idle is disabled"
+    );
   } finally {
     if (socket) socket.close();
     if (terminalSessionId) closeTerminalSession(terminalSessionId);

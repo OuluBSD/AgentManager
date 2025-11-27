@@ -85,6 +85,32 @@ test("projects API uses the database for list/create/update", async () => {
       .where(eq(schema.projects.id, createdId));
     assert.equal(patchedRow?.name, "Renamed");
     assert.equal(patchedRow?.status, "waiting");
+
+    // Test snapshots API
+    const snapshotCreateRes = await app.inject({
+      method: "POST",
+      url: `/projects/${createdId}/snapshots`,
+      headers: { "x-session-token": session.token },
+      payload: { message: "Test snapshot" },
+    });
+    assert.equal(snapshotCreateRes.statusCode, 201);
+    const snapshotCreateData = snapshotCreateRes.json() as { gitSha: string };
+    assert.ok(snapshotCreateData.gitSha);
+
+    const snapshotListRes = await app.inject({
+      method: "GET",
+      url: `/projects/${createdId}/snapshots`,
+      headers: { "x-session-token": session.token },
+    });
+    assert.equal(snapshotListRes.statusCode, 200);
+    const snapshots = snapshotListRes.json() as Array<{
+      id: string;
+      gitSha: string;
+      message?: string;
+    }>;
+    assert.equal(snapshots.length, 1);
+    assert.equal(snapshots[0].gitSha, snapshotCreateData.gitSha);
+    assert.equal(snapshots[0].message, "Test snapshot");
   } finally {
     await app.close();
     await client.close();

@@ -13,6 +13,7 @@ import {
   fetchRoadmaps,
   fetchFileDiff,
   fetchChatMessages,
+  fetchMetaChatMessages,
   createProject,
   createRoadmap,
   createChat,
@@ -23,6 +24,7 @@ import {
   fetchAuditEvents,
   sendTerminalInput,
   postChatMessage,
+  postMetaChatMessage,
   updateChatStatus,
   fetchTemplates,
   fetchMetaChat,
@@ -46,6 +48,9 @@ import {
   type SlashCommandContext,
 } from "../../lib/slashCommands";
 import { Login } from "../../components/Login";
+import { useMetaChatWebSocket } from "../../hooks/useMetaChatWebSocket";
+import { TopMenuBar, type AppSection } from "../../components/TopMenuBar";
+import { AIChat } from "../../components/AIChat";
 
 type Status =
   | "inactive"
@@ -457,6 +462,7 @@ export default function Page() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const params = useParams<{ segments?: string | string[] }>();
+  const [currentSection, setCurrentSection] = useState<AppSection>("agent-manager");
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [roadmaps, setRoadmaps] = useState<RoadmapItem[]>([]);
   const [chats, setChats] = useState<ChatItem[]>([]);
@@ -583,6 +589,68 @@ export default function Page() {
   useEffect(() => {
     applyThemePalette(activePalette);
   }, [activePalette]);
+
+  // Handle real-time meta-chat status updates via WebSocket
+  const handleMetaChatStatusUpdate = useCallback(
+    (status: { roadmapId: string; status: string; progress: number; summary: string }) => {
+      // Update roadmapStatus state with new status
+      setRoadmapStatus((prev) => ({
+        ...prev,
+        [status.roadmapId]: {
+          status: status.status as Status,
+          progress: status.progress,
+          summary: status.summary,
+        },
+      }));
+
+      // Update roadmaps array to reflect new status/progress
+      setRoadmaps((prev) =>
+        prev.map((roadmap) =>
+          roadmap.id === status.roadmapId
+            ? {
+                ...roadmap,
+                status: status.status as Status,
+                progress: status.progress,
+                summary: status.summary,
+              }
+            : roadmap
+        )
+      );
+    },
+    []
+  );
+
+  const handleMetaChatMessage = useCallback(
+    (data: { metaChatId: string; message: { id: string; role: string; content: string } }) => {
+      // If we're currently viewing this meta-chat, append the message
+      const currentChat = chats.find((c) => c.id === selectedChatId);
+      if (currentChat?.meta && currentChat.id === data.metaChatId) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: data.message.id,
+            chatId: data.metaChatId,
+            role: data.message.role as "user" | "assistant" | "system" | "status" | "meta",
+            content: data.message.content,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
+    },
+    [chats, selectedChatId]
+  );
+
+  // Subscribe to real-time meta-chat updates for the selected roadmap
+  const { isConnected: wsConnected } = useMetaChatWebSocket({
+    roadmapId: selectedRoadmapId,
+    sessionToken,
+    enabled: !!selectedRoadmapId && !!sessionToken,
+    onStatusUpdate: handleMetaChatStatusUpdate,
+    onMessage: handleMetaChatMessage,
+    onError: (error) => {
+      console.error("[MetaChatWS] Connection error:", error);
+    },
+  });
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -862,29 +930,41 @@ export default function Page() {
     }
   }, []);
 
-  const loadMessagesForChat = useCallback(async (chatId: string, token: string) => {
-    if (!chatId) {
-      setMessages([]);
-      setMessagesError("Select a chat to load messages.");
-      return;
-    }
-    if (chatId.startsWith("meta-")) {
-      setMessages([]);
-      setMessagesError("Meta-chat messages are read-only and not yet surfaced here.");
-      return;
-    }
-    setMessagesLoading(true);
-    setMessagesError(null);
-    try {
-      const items = await fetchChatMessages(token, chatId);
-      setMessages(items as MessageItem[]);
-    } catch (err) {
-      setMessagesError(err instanceof Error ? err.message : "Failed to load messages");
-      setMessages([]);
-    } finally {
-      setMessagesLoading(false);
-    }
-  }, []);
+  const loadMessagesForChat = useCallback(
+    async (chatId: string, token: string) => {
+      if (!chatId) {
+        setMessages([]);
+        setMessagesError("Select a chat to load messages.");
+        return;
+      }
+      setMessagesLoading(true);
+      setMessagesError(null);
+      try {
+        if (chatId.startsWith("meta-")) {
+          // Load meta-chat messages
+          const metaChatId = chatId.replace("meta-", "");
+          const metaChat = Object.values(metaChats).find((mc) => mc.roadmapListId === metaChatId);
+          if (metaChat) {
+            const items = await fetchMetaChatMessages(token, metaChat.id);
+            setMessages(items.map((m) => ({ ...m, chatId: m.metaChatId })) as MessageItem[]);
+          } else {
+            setMessages([]);
+            setMessagesError("Meta-chat not found");
+          }
+        } else {
+          // Load regular chat messages
+          const items = await fetchChatMessages(token, chatId);
+          setMessages(items as MessageItem[]);
+        }
+      } catch (err) {
+        setMessagesError(err instanceof Error ? err.message : "Failed to load messages");
+        setMessages([]);
+      } finally {
+        setMessagesLoading(false);
+      }
+    },
+    [metaChats]
+  );
 
   const clearWorkspaceState = useCallback(
     (reason?: string) => {
@@ -1992,10 +2072,6 @@ export default function Page() {
       setMessagesError("Select a chat to send a message.");
       return;
     }
-    if (selectedChatId.startsWith("meta-")) {
-      setMessagesError("Meta-chat messages are not supported yet.");
-      return;
-    }
     const content = messageDraft.trim();
     if (!content) return;
 
@@ -2041,13 +2117,27 @@ export default function Page() {
       return;
     }
 
-    // Regular message
+    // Send message (meta-chat or regular chat)
     setSendingMessage(true);
     setMessagesError(null);
     try {
-      await postChatMessage(sessionToken, selectedChatId, { role: "user", content });
-      setMessageDraft("");
-      await loadMessagesForChat(selectedChatId, sessionToken);
+      if (selectedChatId.startsWith("meta-")) {
+        // Send meta-chat message
+        const metaChatId = selectedChatId.replace("meta-", "");
+        const metaChat = Object.values(metaChats).find((mc) => mc.roadmapListId === metaChatId);
+        if (metaChat) {
+          await postMetaChatMessage(sessionToken, metaChat.id, { role: "user", content });
+          setMessageDraft("");
+          await loadMessagesForChat(selectedChatId, sessionToken);
+        } else {
+          setMessagesError("Meta-chat not found");
+        }
+      } else {
+        // Send regular chat message
+        await postChatMessage(sessionToken, selectedChatId, { role: "user", content });
+        setMessageDraft("");
+        await loadMessagesForChat(selectedChatId, sessionToken);
+      }
     } catch (err) {
       setMessagesError(err instanceof Error ? err.message : "Failed to send message");
     } finally {
@@ -3151,779 +3241,823 @@ export default function Page() {
   }
 
   return (
-    <main className="page">
-      <FileDialog isOpen={isFileDialogOpen} onClose={() => setIsFileDialogOpen(false)} />
-      <div className="panel-card" style={{ marginBottom: 12 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
-          <div>
-            <div className="panel-title">Project Nexus</div>
-            <div className="item-subtle">
-              Logged in as <strong>{activeUser}</strong>
-            </div>
-          </div>
-          <button className="ghost" onClick={handleLogout} style={{ alignSelf: "flex-start" }}>
-            Logout
-          </button>
-        </div>
-        <div
-          className="login-row"
-          style={{ gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}
-        >
-          <span className="item-subtle" style={{ minWidth: 120 }}>
-            Theme mode
-          </span>
-          <select
-            className="filter"
-            value={globalThemeMode}
-            onChange={(event) => setGlobalThemeMode(event.target.value as GlobalThemeMode)}
-            style={{ minWidth: 160 }}
-          >
-            <option value="auto">Auto (OS)</option>
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-          </select>
-          <span className="item-subtle" style={{ minWidth: 220, flex: 1 }}>
-            {selectedProject?.theme
-              ? `Project overrides ${selectedProject.name}`
-              : `Base ${resolvedGlobalThemeMode} theme`}
-          </span>
-        </div>
-        <div
-          className="login-row"
-          style={{ gap: 8, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}
-        >
-          <input
-            type="checkbox"
-            id="sidebar-animations"
-            checked={sidebarAnimationsEnabled}
-            onChange={(e) => setSidebarAnimationsEnabled(e.target.checked)}
-            style={{ cursor: "pointer" }}
-          />
-          <label htmlFor="sidebar-animations" className="item-subtle" style={{ cursor: "pointer" }}>
-            Enable sidebar animations
-          </label>
-        </div>
-        <div
-          className="login-row"
-          style={{ gap: 8, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}
-        >
-          <input
-            type="checkbox"
-            id="terminal-auto-open"
-            checked={autoOpenTerminal}
-            onChange={(e) => setAutoOpenTerminal(e.target.checked)}
-            style={{ cursor: "pointer" }}
-          />
-          <label htmlFor="terminal-auto-open" className="item-subtle" style={{ cursor: "pointer" }}>
-            Auto-open terminal on project selection
-          </label>
-        </div>
-        <div
-          className="login-row"
-          style={{ gap: 8, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}
-        >
-          <span className="item-subtle" style={{ minWidth: 120 }}>
-            Detail mode
-          </span>
-          <input
-            type="radio"
-            id="detail-mode-minimal"
-            name="detail-mode"
-            value="minimal"
-            checked={detailMode === "minimal"}
-            onChange={(e) => setDetailMode(e.target.value as "minimal" | "expanded")}
-            style={{ cursor: "pointer" }}
-          />
-          <label
-            htmlFor="detail-mode-minimal"
-            className="item-subtle"
-            style={{ cursor: "pointer" }}
-          >
-            Minimal
-          </label>
-          <input
-            type="radio"
-            id="detail-mode-expanded"
-            name="detail-mode"
-            value="expanded"
-            checked={detailMode === "expanded"}
-            onChange={(e) => setDetailMode(e.target.value as "minimal" | "expanded")}
-            style={{ cursor: "pointer" }}
-          />
-          <label
-            htmlFor="detail-mode-expanded"
-            className="item-subtle"
-            style={{ cursor: "pointer" }}
-          >
-            Expanded
-          </label>
-        </div>
-        {statusMessage && (
-          <div className="item-subtle" style={{ color: "#F59E0B", marginTop: 8 }}>
-            {statusMessage}
-          </div>
-        )}
-      </div>
-      <div className="columns">
-        <div
-          className={`column projects-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}
-        >
-          <header className="column-header">
-            <span>Projects</span>
-            <button
-              className="ghost"
-              onClick={seedDemoData}
-              disabled={!sessionToken || seeding || loading}
-              title={sessionToken ? "" : "Login to create demo data"}
+    <>
+      <TopMenuBar currentSection={currentSection} onSectionChange={setCurrentSection} />
+      {currentSection === "ai-chat" ? (
+        <AIChat />
+      ) : (
+        <main className="page">
+          <FileDialog isOpen={isFileDialogOpen} onClose={() => setIsFileDialogOpen(false)} />
+          <div className="panel-card" style={{ marginBottom: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
+              }}
             >
-              {seeding ? "Seeding…" : "Seed demo"}
-            </button>
-          </header>
-          {selectedProject && (
-            <div className="item-subtle project-context">
-              Context: {selectedProject.category} · {formatStatusLabel(selectedProject.status)} ·{" "}
-              {selectedProject.info || "No project description yet."}
-            </div>
-          )}
-          <div
-            className="login-row"
-            style={{ gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}
-          >
-            <input
-              className="filter"
-              placeholder="Filter projects"
-              value={projectFilter}
-              onChange={(e) => setProjectFilter(e.target.value)}
-              style={{ flex: 1, minWidth: 160 }}
-            />
-            <button
-              className="ghost"
-              onClick={() => setProjectFilter("")}
-              disabled={!normalizedProjectFilter}
-            >
-              Clear
-            </button>
-          </div>
-          <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-            <input
-              className="filter"
-              placeholder="Project name"
-              value={projectDraft.name}
-              onChange={(e) => setProjectDraft((prev) => ({ ...prev, name: e.target.value }))}
-              style={{ minWidth: 160 }}
-            />
-            <input
-              className="filter"
-              placeholder="Category"
-              value={projectDraft.category}
-              onChange={(e) => setProjectDraft((prev) => ({ ...prev, category: e.target.value }))}
-              style={{ minWidth: 120 }}
-            />
-            <input
-              className="filter"
-              placeholder="Description"
-              value={projectDraft.description}
-              onChange={(e) =>
-                setProjectDraft((prev) => ({ ...prev, description: e.target.value }))
-              }
-              style={{ flex: 1, minWidth: 180 }}
-            />
-            <select
-              className="filter"
-              value={projectThemePreset}
-              onChange={(event) =>
-                setProjectThemePreset(event.target.value as ProjectThemePresetKey)
-              }
-              style={{ minWidth: 160 }}
-            >
-              {(Object.entries(projectThemePresetLabels) as [ProjectThemePresetKey, string][]).map(
-                ([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                )
-              )}
-            </select>
-            <button
-              className="tab"
-              onClick={editingProjectId ? handleUpdateProject : handleCreateProject}
-              disabled={
-                editingProjectId
-                  ? updatingProject || !sessionToken
-                  : creatingProject || !sessionToken
-              }
-              title={sessionToken ? "" : "Login required"}
-            >
-              {editingProjectId
-                ? updatingProject
-                  ? "Saving…"
-                  : "Save changes"
-                : creatingProject
-                  ? "Creating…"
-                  : "+ Project"}
-            </button>
-            {editingProjectId && (
-              <button className="ghost" onClick={cancelProjectEdit} disabled={updatingProject}>
-                Cancel edit
+              <div>
+                <div className="panel-title">Project Nexus</div>
+                <div className="item-subtle">
+                  Logged in as <strong>{activeUser}</strong>
+                </div>
+              </div>
+              <button className="ghost" onClick={handleLogout} style={{ alignSelf: "flex-start" }}>
+                Logout
               </button>
-            )}
-          </div>
-          {editingProjectName && (
-            <div className="item-subtle editing-hint">Editing project: {editingProjectName}</div>
-          )}
-          {loading && <div className="item-subtle">Loading projects…</div>}
-          {error && <div className="item-subtle">{error}</div>}
-          <div className="list">
-            {!loading && groupedProjects.length === 0 && (
-              <div className="item-subtle">
-                {projects.length === 0
-                  ? sessionToken
-                    ? "No projects yet. Seed demo data to populate the lists."
-                    : "No projects yet. Login to load data."
-                  : normalizedProjectFilter
-                    ? `No projects match "${normalizedProjectFilter}".`
-                    : "No projects match the current filter."}
+            </div>
+            <div
+              className="login-row"
+              style={{ gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}
+            >
+              <span className="item-subtle" style={{ minWidth: 120 }}>
+                Theme mode
+              </span>
+              <select
+                className="filter"
+                value={globalThemeMode}
+                onChange={(event) => setGlobalThemeMode(event.target.value as GlobalThemeMode)}
+                style={{ minWidth: 160 }}
+              >
+                <option value="auto">Auto (OS)</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+              <span className="item-subtle" style={{ minWidth: 220, flex: 1 }}>
+                {selectedProject?.theme
+                  ? `Project overrides ${selectedProject.name}`
+                  : `Base ${resolvedGlobalThemeMode} theme`}
+              </span>
+            </div>
+            <div
+              className="login-row"
+              style={{ gap: 8, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}
+            >
+              <input
+                type="checkbox"
+                id="sidebar-animations"
+                checked={sidebarAnimationsEnabled}
+                onChange={(e) => setSidebarAnimationsEnabled(e.target.checked)}
+                style={{ cursor: "pointer" }}
+              />
+              <label
+                htmlFor="sidebar-animations"
+                className="item-subtle"
+                style={{ cursor: "pointer" }}
+              >
+                Enable sidebar animations
+              </label>
+            </div>
+            <div
+              className="login-row"
+              style={{ gap: 8, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}
+            >
+              <input
+                type="checkbox"
+                id="terminal-auto-open"
+                checked={autoOpenTerminal}
+                onChange={(e) => setAutoOpenTerminal(e.target.checked)}
+                style={{ cursor: "pointer" }}
+              />
+              <label
+                htmlFor="terminal-auto-open"
+                className="item-subtle"
+                style={{ cursor: "pointer" }}
+              >
+                Auto-open terminal on project selection
+              </label>
+            </div>
+            <div
+              className="login-row"
+              style={{ gap: 8, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}
+            >
+              <span className="item-subtle" style={{ minWidth: 120 }}>
+                Detail mode
+              </span>
+              <input
+                type="radio"
+                id="detail-mode-minimal"
+                name="detail-mode"
+                value="minimal"
+                checked={detailMode === "minimal"}
+                onChange={(e) => setDetailMode(e.target.value as "minimal" | "expanded")}
+                style={{ cursor: "pointer" }}
+              />
+              <label
+                htmlFor="detail-mode-minimal"
+                className="item-subtle"
+                style={{ cursor: "pointer" }}
+              >
+                Minimal
+              </label>
+              <input
+                type="radio"
+                id="detail-mode-expanded"
+                name="detail-mode"
+                value="expanded"
+                checked={detailMode === "expanded"}
+                onChange={(e) => setDetailMode(e.target.value as "minimal" | "expanded")}
+                style={{ cursor: "pointer" }}
+              />
+              <label
+                htmlFor="detail-mode-expanded"
+                className="item-subtle"
+                style={{ cursor: "pointer" }}
+              >
+                Expanded
+              </label>
+            </div>
+            {statusMessage && (
+              <div className="item-subtle" style={{ color: "#F59E0B", marginTop: 8 }}>
+                {statusMessage}
               </div>
             )}
-            {groupedProjects.map((group) => (
-              <div className="project-group" key={group.category}>
-                <div className="project-group-header">
-                  <span>{group.category}</span>
-                  <span className="item-subtle">
-                    {group.items.length} project{group.items.length === 1 ? "" : "s"}
-                  </span>
+          </div>
+          <div className="columns">
+            <div
+              className={`column projects-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}
+            >
+              <header className="column-header">
+                <span>Projects</span>
+                <button
+                  className="ghost"
+                  onClick={seedDemoData}
+                  disabled={!sessionToken || seeding || loading}
+                  title={sessionToken ? "" : "Login to create demo data"}
+                >
+                  {seeding ? "Seeding…" : "Seed demo"}
+                </button>
+              </header>
+              {selectedProject && (
+                <div className="item-subtle project-context">
+                  Context: {selectedProject.category} · {formatStatusLabel(selectedProject.status)}{" "}
+                  · {selectedProject.info || "No project description yet."}
                 </div>
-                {group.items.map((p) => (
-                  <div
-                    className={`item ${selectedProjectId === p.id ? "active" : ""}`}
-                    key={p.id ?? `${p.name}-${group.category}`}
-                    onClick={() => p.id && handleSelectProject(p.id)}
-                    onContextMenu={(event) => openProjectContextMenu(event, p)}
-                  >
-                    <div className="item-line">
-                      <span className="status-dot" style={{ background: statusColor[p.status] }} />
-                      <span className="item-title">{p.name}</span>
-                      <span className="item-pill">{p.category}</span>
+              )}
+              <div
+                className="login-row"
+                style={{ gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}
+              >
+                <input
+                  className="filter"
+                  placeholder="Filter projects"
+                  value={projectFilter}
+                  onChange={(e) => setProjectFilter(e.target.value)}
+                  style={{ flex: 1, minWidth: 160 }}
+                />
+                <button
+                  className="ghost"
+                  onClick={() => setProjectFilter("")}
+                  disabled={!normalizedProjectFilter}
+                >
+                  Clear
+                </button>
+              </div>
+              <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                <input
+                  className="filter"
+                  placeholder="Project name"
+                  value={projectDraft.name}
+                  onChange={(e) => setProjectDraft((prev) => ({ ...prev, name: e.target.value }))}
+                  style={{ minWidth: 160 }}
+                />
+                <input
+                  className="filter"
+                  placeholder="Category"
+                  value={projectDraft.category}
+                  onChange={(e) =>
+                    setProjectDraft((prev) => ({ ...prev, category: e.target.value }))
+                  }
+                  style={{ minWidth: 120 }}
+                />
+                <input
+                  className="filter"
+                  placeholder="Description"
+                  value={projectDraft.description}
+                  onChange={(e) =>
+                    setProjectDraft((prev) => ({ ...prev, description: e.target.value }))
+                  }
+                  style={{ flex: 1, minWidth: 180 }}
+                />
+                <select
+                  className="filter"
+                  value={projectThemePreset}
+                  onChange={(event) =>
+                    setProjectThemePreset(event.target.value as ProjectThemePresetKey)
+                  }
+                  style={{ minWidth: 160 }}
+                >
+                  {(
+                    Object.entries(projectThemePresetLabels) as [ProjectThemePresetKey, string][]
+                  ).map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="tab"
+                  onClick={editingProjectId ? handleUpdateProject : handleCreateProject}
+                  disabled={
+                    editingProjectId
+                      ? updatingProject || !sessionToken
+                      : creatingProject || !sessionToken
+                  }
+                  title={sessionToken ? "" : "Login required"}
+                >
+                  {editingProjectId
+                    ? updatingProject
+                      ? "Saving…"
+                      : "Save changes"
+                    : creatingProject
+                      ? "Creating…"
+                      : "+ Project"}
+                </button>
+                {editingProjectId && (
+                  <button className="ghost" onClick={cancelProjectEdit} disabled={updatingProject}>
+                    Cancel edit
+                  </button>
+                )}
+              </div>
+              {editingProjectName && (
+                <div className="item-subtle editing-hint">
+                  Editing project: {editingProjectName}
+                </div>
+              )}
+              {loading && <div className="item-subtle">Loading projects…</div>}
+              {error && <div className="item-subtle">{error}</div>}
+              <div className="list">
+                {!loading && groupedProjects.length === 0 && (
+                  <div className="item-subtle">
+                    {projects.length === 0
+                      ? sessionToken
+                        ? "No projects yet. Seed demo data to populate the lists."
+                        : "No projects yet. Login to load data."
+                      : normalizedProjectFilter
+                        ? `No projects match "${normalizedProjectFilter}".`
+                        : "No projects match the current filter."}
+                  </div>
+                )}
+                {groupedProjects.map((group) => (
+                  <div className="project-group" key={group.category}>
+                    <div className="project-group-header">
+                      <span>{group.category}</span>
+                      <span className="item-subtle">
+                        {group.items.length} project{group.items.length === 1 ? "" : "s"}
+                      </span>
                     </div>
-                    {detailMode === "expanded" && <div className="item-sub">{p.info}</div>}
+                    {group.items.map((p) => (
+                      <div
+                        className={`item ${selectedProjectId === p.id ? "active" : ""}`}
+                        key={p.id ?? `${p.name}-${group.category}`}
+                        onClick={() => p.id && handleSelectProject(p.id)}
+                        onContextMenu={(event) => openProjectContextMenu(event, p)}
+                      >
+                        <div className="item-line">
+                          <span
+                            className="status-dot"
+                            style={{ background: statusColor[p.status] }}
+                          />
+                          <span className="item-title">{p.name}</span>
+                          <span className="item-pill">{p.category}</span>
+                        </div>
+                        {detailMode === "expanded" && <div className="item-sub">{p.info}</div>}
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>
-            ))}
-          </div>
-        </div>
-
-        <div
-          className={`column roadmaps-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}
-        >
-          <header className="column-header">
-            <span>Roadmap Lists</span>
-          </header>
-          {selectedRoadmapId && (
-            <div className="item-subtle roadmap-context">
-              {roadmapSummary
-                ? `${progressPercent(roadmapSummary.progress)}% · ${formatStatusLabel(
-                    roadmapSummary.status
-                  )} · ${roadmapSummary.summary ?? "Summary not available for this roadmap."}`
-                : "Loading roadmap context…"}
             </div>
-          )}
-          <div
-            className="login-row"
-            style={{ gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}
-          >
-            <input
-              className="filter"
-              placeholder="Filter roadmaps"
-              value={roadmapFilter}
-              onChange={(e) => setRoadmapFilter(e.target.value)}
-              style={{ flex: 1, minWidth: 160 }}
-              disabled={!selectedProjectId}
-            />
-            <button
-              className="ghost"
-              onClick={() => setRoadmapFilter("")}
-              disabled={!selectedProjectId || !normalizedRoadmapFilter}
-            >
-              Clear
-            </button>
-          </div>
-          <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-            <input
-              className="filter"
-              placeholder="Roadmap title"
-              value={roadmapDraft.title}
-              onChange={(e) => setRoadmapDraft((prev) => ({ ...prev, title: e.target.value }))}
-              style={{ minWidth: 160 }}
-              disabled={!selectedProjectId}
-            />
-            <input
-              className="filter"
-              placeholder="Tags (comma separated)"
-              value={roadmapDraft.tagsInput}
-              onChange={(e) => setRoadmapDraft((prev) => ({ ...prev, tagsInput: e.target.value }))}
-              style={{ flex: 1, minWidth: 180 }}
-              disabled={!selectedProjectId}
-            />
-            <button
-              className="tab"
-              onClick={editingRoadmapId ? handleUpdateRoadmap : handleCreateRoadmap}
-              disabled={
-                editingRoadmapId
-                  ? updatingRoadmap || !sessionToken || !selectedProjectId
-                  : creatingRoadmap || !sessionToken || !selectedProjectId
-              }
-              title={selectedProjectId ? "" : "Select a project first"}
-            >
-              {editingRoadmapId
-                ? updatingRoadmap
-                  ? "Saving…"
-                  : "Save changes"
-                : creatingRoadmap
-                  ? "Creating…"
-                  : "+ Roadmap"}
-            </button>
-            {editingRoadmapId && (
-              <button className="ghost" onClick={cancelRoadmapEdit} disabled={updatingRoadmap}>
-                Cancel edit
-              </button>
-            )}
-          </div>
-          {editingRoadmapName && (
-            <div className="item-subtle editing-hint">Editing roadmap: {editingRoadmapName}</div>
-          )}
-          <div className="list">
-            {selectedProjectId && filteredRoadmaps.length === 0 && (
-              <div className="item-subtle">
-                {roadmaps.length === 0
-                  ? "No roadmaps for this project yet."
-                  : normalizedRoadmapFilter
-                    ? `No roadmaps match "${normalizedRoadmapFilter}".`
-                    : "No roadmaps for this project yet."}
-              </div>
-            )}
-            {filteredRoadmaps.map((r) => {
-              const statusRecord = r.id ? roadmapStatus[r.id] : undefined;
-              const displayProgress = statusRecord?.progress ?? r.progress;
-              const displayStatus = statusRecord?.status ?? r.status;
-              const displaySummary = statusRecord?.summary ?? r.summary;
-              if (!r.title) return null;
-              return (
-                <div
-                  className={`item ${selectedRoadmapId === r.id ? "active" : ""}`}
-                  key={r.id ?? r.title}
-                  onClick={() => r.id && handleSelectRoadmap(r.id)}
-                  onContextMenu={(event) => openRoadmapContextMenu(event, r)}
-                >
-                  <div className="item-line">
-                    <span
-                      className="status-dot"
-                      style={{
-                        background: statusColor[displayStatus] ?? statusColor.active,
-                      }}
-                    />
-                    <span className="item-title">{r.title}</span>
-                    <span className="item-subtle">{progressPercent(displayProgress)}%</span>
-                  </div>
-                  <div className="roadmap-summary-row">
-                    {detailMode === "expanded" && (
-                      <span className="item-subtle">
-                        {displaySummary ?? "Summary unavailable for this roadmap."}
-                      </span>
-                    )}
-                    <span className="item-subtle roadmap-status-text">
-                      {formatStatusLabel(displayStatus)}
-                    </span>
-                  </div>
-                  {detailMode === "expanded" && r.tags.length > 0 && (
-                    <div className="roadmap-tags">
-                      {r.tags.map((tag) => (
-                        <span className="item-pill" key={`${r.title}-${tag}`}>
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {r.metaChatId && (
-                    <div className="item-subtle" style={{ marginTop: 4 }}>
-                      Meta chat linked
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
 
-        <div className={`column chats-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}>
-          <header className="column-header">
-            <span>Chats</span>
-          </header>
-          <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-            <input
-              className="filter"
-              placeholder="Chat title"
-              value={chatDraft.title}
-              onChange={(e) => setChatDraft((prev) => ({ ...prev, title: e.target.value }))}
-              style={{ minWidth: 160 }}
-              disabled={!selectedRoadmapId}
-            />
-            <input
-              className="filter"
-              placeholder="Goal"
-              value={chatDraft.goal}
-              onChange={(e) => setChatDraft((prev) => ({ ...prev, goal: e.target.value }))}
-              style={{ flex: 1, minWidth: 200 }}
-              disabled={!selectedRoadmapId}
-            />
-            <button
-              className="tab"
-              onClick={handleCreateChat}
-              disabled={creatingChat || !sessionToken || !selectedRoadmapId}
-              title={selectedRoadmapId ? "" : "Select a roadmap first"}
+            <div
+              className={`column roadmaps-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}
             >
-              {creatingChat ? "Creating…" : "+ Chat"}
-            </button>
-          </div>
-          <div className="list">
-            {chats.length === 0 && selectedRoadmapId && (
-              <div className="item-subtle">No chats for this roadmap yet.</div>
-            )}
-            {chats.map((c) => (
+              <header className="column-header">
+                <span>Roadmap Lists</span>
+              </header>
+              {selectedRoadmapId && (
+                <div className="item-subtle roadmap-context">
+                  {roadmapSummary
+                    ? `${progressPercent(roadmapSummary.progress)}% · ${formatStatusLabel(
+                        roadmapSummary.status
+                      )} · ${roadmapSummary.summary ?? "Summary not available for this roadmap."}`
+                    : "Loading roadmap context…"}
+                </div>
+              )}
               <div
-                className={`item ${c.meta ? "meta" : ""} ${selectedChatId === c.id ? "active" : ""}`}
-                key={c.id ?? c.title}
-                onClick={() => handleSelectChat(c)}
-                onContextMenu={(event) => openChatContextMenu(event, c)}
-                style={{ cursor: c.id ? "pointer" : "default" }}
+                className="login-row"
+                style={{ gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}
               >
-                <div className="item-line">
-                  <span
-                    className="status-dot"
-                    style={{ background: statusColor[c.status] ?? statusColor.active }}
-                  />
-                  <span className="item-title">{c.title}</span>
-                  <span className="item-subtle">{progressPercent(c.progress)}%</span>
-                </div>
-                {detailMode === "expanded" && <div className="item-sub">{c.note}</div>}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className={`column main-panel ${sidebarAnimationsEnabled ? "column-animated" : ""}`}>
-          <header className="column-header">
-            <span>Main Panel</span>
-            <div className="tabs">
-              {["Chat", "Terminal", "Code"].map((tab) => (
+                <input
+                  className="filter"
+                  placeholder="Filter roadmaps"
+                  value={roadmapFilter}
+                  onChange={(e) => setRoadmapFilter(e.target.value)}
+                  style={{ flex: 1, minWidth: 160 }}
+                  disabled={!selectedProjectId}
+                />
                 <button
-                  key={tab}
-                  className={`tab ${activeTab === tab ? "active" : ""}`}
-                  onClick={() => setActiveTab(tab as typeof activeTab)}
+                  className="ghost"
+                  onClick={() => setRoadmapFilter("")}
+                  disabled={!selectedProjectId || !normalizedRoadmapFilter}
                 >
-                  {tab}
+                  Clear
                 </button>
-              ))}
-            </div>
-          </header>
-          <div className="panel-body">{tabBody}</div>
-        </div>
-      </div>
-
-      <div className="panel-card" style={{ marginTop: 12 }}>
-        <div className="panel-title">Recent Activity</div>
-        <div className="panel-text">Latest file/terminal actions (backend DB required).</div>
-        <div className="login-row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-          <select
-            className="filter"
-            value={auditProjectId}
-            onChange={(e) => setAuditProjectId(e.target.value)}
-          >
-            <option value="">All projects</option>
-            {projects
-              .filter((p) => p.id)
-              .map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-          </select>
-          <select
-            className="filter"
-            value={auditFilters.eventType}
-            onChange={(e) => setAuditFilters((prev) => ({ ...prev, eventType: e.target.value }))}
-          >
-            <option value="">Any event</option>
-            {eventTypeOptions.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-          <input
-            className="filter"
-            placeholder="User ID"
-            value={auditFilters.userId}
-            onChange={(e) => setAuditFilters((prev) => ({ ...prev, userId: e.target.value }))}
-          />
-          <input
-            className="filter"
-            placeholder="IP address"
-            value={auditFilters.ipAddress}
-            onChange={(e) => setAuditFilters((prev) => ({ ...prev, ipAddress: e.target.value }))}
-            style={{ minWidth: 140 }}
-          />
-          <input
-            className="filter"
-            placeholder="Path contains"
-            value={auditFilters.pathContains}
-            onChange={(e) => setAuditFilters((prev) => ({ ...prev, pathContains: e.target.value }))}
-            style={{ flex: 1, minWidth: 160 }}
-          />
-          <select
-            className="filter"
-            value={auditSort}
-            onChange={(e) => {
-              const value = e.target.value === "asc" ? "asc" : "desc";
-              setAuditSort(value);
-            }}
-          >
-            <option value="desc">Newest first</option>
-            <option value="asc">Oldest first</option>
-          </select>
-          <button
-            className="tab"
-            onClick={() => loadAuditLog(auditProjectId || undefined, { reset: true })}
-            disabled={auditLoading}
-          >
-            Apply filters
-          </button>
-          <button
-            className="ghost"
-            onClick={() => {
-              const cleared = { eventType: "", userId: "", pathContains: "", ipAddress: "" };
-              setAuditFilters(cleared);
-              loadAuditLog(auditProjectId || undefined, { reset: true, filtersOverride: cleared });
-            }}
-            disabled={auditLoading}
-          >
-            Clear
-          </button>
-        </div>
-        <div className="login-row" style={{ gap: 8, marginBottom: 8 }}>
-          <button
-            className="tab"
-            onClick={() => loadAuditLog(auditProjectId || undefined, { reset: true })}
-            disabled={auditLoading}
-          >
-            {auditLoading ? "Loading…" : "Refresh"}
-          </button>
-          <button
-            className="ghost"
-            onClick={() => loadAuditLog(auditProjectId || undefined)}
-            disabled={!auditHasMore || auditLoading}
-          >
-            {auditLoading ? "Loading…" : auditHasMore ? "Load more" : "No more events"}
-          </button>
-        </div>
-        {auditError && (
-          <div className="item-subtle" style={{ color: "#EF4444" }}>
-            {auditError}
-          </div>
-        )}
-        <div className="list" style={{ maxHeight: 260, overflow: "auto" }}>
-          {auditEvents.length === 0 && <div className="item-subtle">No audit events yet.</div>}
-          {auditEvents.map((event) => (
-            <div className="item" key={event.id}>
-              <div className="item-line">
-                <span className="item-title">{event.eventType}</span>
-                <span className="item-subtle">
-                  {new Date(event.createdAt).toLocaleTimeString()}
-                </span>
               </div>
-              <div className="item-sub">{event.path ?? event.sessionId ?? "N/A"}</div>
-              {(() => {
-                const derivedIp =
-                  event.ipAddress ??
-                  (event.metadata &&
-                  typeof (event.metadata as Record<string, unknown>).ip === "string"
-                    ? String((event.metadata as Record<string, unknown>).ip)
-                    : null);
-                return (
-                  <div className="item-subtle">
-                    user {event.userId ?? "—"} · session {event.sessionId ?? "—"} · project{" "}
-                    {event.projectId ?? "—"} · ip {derivedIp ?? "—"}
-                  </div>
-                );
-              })()}
-              {(() => {
-                const metaSummary = summarizeAuditMeta(event.metadata);
-                return metaSummary ? <div className="item-subtle">meta {metaSummary}</div> : null;
-              })()}
-            </div>
-          ))}
-          {auditLoading && <div className="item-subtle">Loading…</div>}
-        </div>
-      </div>
-      {contextPanel && (
-        <div className="context-panel">
-          <div className="context-panel-header">
-            <div>
-              <div className="context-panel-title">{contextPanelTitle}</div>
-              <div className="item-subtle">{contextPanelSubject}</div>
-            </div>
-            <button className="ghost" onClick={() => setContextPanel(null)}>
-              Close
-            </button>
-          </div>
-          <div className="context-panel-content">
-            {contextPanel.kind === "project-settings" ? (
-              <>
-                {contextPanel.loading ? (
-                  <div className="item-subtle">Loading settings…</div>
-                ) : contextPanel.error ? (
-                  <div className="item-subtle" style={{ color: "#EF4444" }}>
-                    {contextPanel.error}
-                  </div>
-                ) : contextPanel.details ? (
-                  <div className="context-panel-section">
-                    <div className="context-panel-list-item">
-                      <span className="context-panel-label">Status</span>
-                      <span className="item-subtle">
-                        {formatStatusLabel(contextPanel.details.project.status as Status)}
-                      </span>
-                    </div>
-                    <div className="context-panel-list-item">
-                      <span className="context-panel-label">Description</span>
-                      <span className="item-subtle">
-                        {contextPanel.details.project.description ?? "No description"}
-                      </span>
-                    </div>
-                    <div className="context-panel-list-item">
-                      <span className="context-panel-label">Roadmaps</span>
-                      <span className="item-subtle">
-                        {contextPanel.details.roadmapLists.length} configured
-                      </span>
-                    </div>
-                    {contextPanel.details.roadmapLists.length > 0 && (
-                      <div className="context-panel-roadmaps">
-                        {contextPanel.details.roadmapLists.slice(0, 3).map((roadmap) => (
-                          <div className="context-panel-list-item" key={roadmap.id}>
-                            <span>{roadmap.title}</span>
-                            <span className="item-subtle">
-                              {progressPercent(roadmap.progress)}% ·{" "}
-                              {formatStatusLabel(roadmap.status as Status)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="item-subtle">No project details available.</div>
+              <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                <input
+                  className="filter"
+                  placeholder="Roadmap title"
+                  value={roadmapDraft.title}
+                  onChange={(e) => setRoadmapDraft((prev) => ({ ...prev, title: e.target.value }))}
+                  style={{ minWidth: 160 }}
+                  disabled={!selectedProjectId}
+                />
+                <input
+                  className="filter"
+                  placeholder="Tags (comma separated)"
+                  value={roadmapDraft.tagsInput}
+                  onChange={(e) =>
+                    setRoadmapDraft((prev) => ({ ...prev, tagsInput: e.target.value }))
+                  }
+                  style={{ flex: 1, minWidth: 180 }}
+                  disabled={!selectedProjectId}
+                />
+                <button
+                  className="tab"
+                  onClick={editingRoadmapId ? handleUpdateRoadmap : handleCreateRoadmap}
+                  disabled={
+                    editingRoadmapId
+                      ? updatingRoadmap || !sessionToken || !selectedProjectId
+                      : creatingRoadmap || !sessionToken || !selectedProjectId
+                  }
+                  title={selectedProjectId ? "" : "Select a project first"}
+                >
+                  {editingRoadmapId
+                    ? updatingRoadmap
+                      ? "Saving…"
+                      : "Save changes"
+                    : creatingRoadmap
+                      ? "Creating…"
+                      : "+ Roadmap"}
+                </button>
+                {editingRoadmapId && (
+                  <button className="ghost" onClick={cancelRoadmapEdit} disabled={updatingRoadmap}>
+                    Cancel edit
+                  </button>
                 )}
-              </>
-            ) : contextPanel.kind === "project-templates" ? (
-              <TemplatePanel
-                templates={templates}
-                token={sessionToken ?? ""}
-                onTemplateCreated={reloadTemplates}
-              />
-            ) : (
-              <>
-                {contextPanel.loading ? (
-                  <div className="item-subtle">Loading roadmap context…</div>
-                ) : contextPanel.error ? (
-                  <div className="item-subtle" style={{ color: "#EF4444" }}>
-                    {contextPanel.error}
+              </div>
+              {editingRoadmapName && (
+                <div className="item-subtle editing-hint">
+                  Editing roadmap: {editingRoadmapName}
+                </div>
+              )}
+              <div className="list">
+                {selectedProjectId && filteredRoadmaps.length === 0 && (
+                  <div className="item-subtle">
+                    {roadmaps.length === 0
+                      ? "No roadmaps for this project yet."
+                      : normalizedRoadmapFilter
+                        ? `No roadmaps match "${normalizedRoadmapFilter}".`
+                        : "No roadmaps for this project yet."}
                   </div>
-                ) : (
-                  <div className="context-panel-section">
-                    {contextPanel.notice && (
-                      <div className="item-subtle" style={{ color: "#10B981" }}>
-                        {contextPanel.notice}
+                )}
+                {filteredRoadmaps.map((r) => {
+                  const statusRecord = r.id ? roadmapStatus[r.id] : undefined;
+                  const displayProgress = statusRecord?.progress ?? r.progress;
+                  const displayStatus = statusRecord?.status ?? r.status;
+                  const displaySummary = statusRecord?.summary ?? r.summary;
+                  if (!r.title) return null;
+                  return (
+                    <div
+                      className={`item ${selectedRoadmapId === r.id ? "active" : ""}`}
+                      key={r.id ?? r.title}
+                      onClick={() => r.id && handleSelectRoadmap(r.id)}
+                      onContextMenu={(event) => openRoadmapContextMenu(event, r)}
+                    >
+                      <div className="item-line">
+                        <span
+                          className="status-dot"
+                          style={{
+                            background: statusColor[displayStatus] ?? statusColor.active,
+                          }}
+                        />
+                        <span className="item-title">{r.title}</span>
+                        <span className="item-subtle">{progressPercent(displayProgress)}%</span>
                       </div>
-                    )}
-                    <div className="context-panel-list-item">
-                      <span className="context-panel-label">Status</span>
-                      <span className="item-subtle">
-                        {formatStatusLabel(contextPanel.status ?? "active")} ·{" "}
-                        {progressPercent(contextPanel.progress ?? 0)}%
-                      </span>
-                    </div>
-                    <div className="context-panel-list-item">
-                      <span className="context-panel-label">Summary</span>
-                      <span className="item-subtle">
-                        {contextPanel.summary ?? "Summary not available yet."}
-                      </span>
-                    </div>
-                    {contextPanel.tags && contextPanel.tags.length > 0 && (
-                      <div className="context-panel-list-item">
-                        <span className="context-panel-label">Tags</span>
+                      <div className="roadmap-summary-row">
+                        {detailMode === "expanded" && (
+                          <span className="item-subtle">
+                            {displaySummary ?? "Summary unavailable for this roadmap."}
+                          </span>
+                        )}
+                        <span className="item-subtle roadmap-status-text">
+                          {formatStatusLabel(displayStatus)}
+                        </span>
+                      </div>
+                      {detailMode === "expanded" && r.tags.length > 0 && (
                         <div className="roadmap-tags">
-                          {contextPanel.tags.map((tag) => (
-                            <span className="item-pill" key={`${contextPanel.roadmapId}-${tag}`}>
+                          {r.tags.map((tag) => (
+                            <span className="item-pill" key={`${r.title}-${tag}`}>
                               {tag}
                             </span>
                           ))}
                         </div>
-                      </div>
-                    )}
-                    {(contextPanel.metaStatus || contextPanel.metaSummary) && (
-                      <div className="context-panel-list-item">
-                        <span className="context-panel-label">Meta chat</span>
-                        <span className="item-subtle">
-                          {contextPanel.metaSummary ?? "Meta summary unavailable."}
-                        </span>
-                        <span className="item-subtle">
-                          {contextPanel.metaStatus
-                            ? `${progressPercent(contextPanel.metaProgress ?? 0)}% · ${formatStatusLabel(
-                                contextPanel.metaStatus
-                              )}`
-                            : ""}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-      {fsToast && (
-        <div className={`toast ${fsToast.tone === "error" ? "toast-error" : "toast-success"}`}>
-          <span style={{ fontWeight: 700 }}>{fsToast.message}</span>
-          {fsToast.detail && <div className="item-subtle">{fsToast.detail}</div>}
-        </div>
-      )}
-      {contextMenu && (
-        <div
-          className="context-menu"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
-          onContextMenu={(event) => event.stopPropagation()}
-        >
-          {contextActionConfig[contextMenu.type].map((action) => (
-            <button
-              key={action.key}
-              type="button"
-              className="context-menu-item"
-              onClick={() => handleContextAction(action.key)}
+                      )}
+                      {r.metaChatId && (
+                        <div className="item-subtle" style={{ marginTop: 4 }}>
+                          Meta chat linked
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div
+              className={`column chats-column ${sidebarAnimationsEnabled ? "column-animated" : ""}`}
             >
-              {action.label}
-            </button>
-          ))}
-        </div>
+              <header className="column-header">
+                <span>Chats</span>
+              </header>
+              <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                <input
+                  className="filter"
+                  placeholder="Chat title"
+                  value={chatDraft.title}
+                  onChange={(e) => setChatDraft((prev) => ({ ...prev, title: e.target.value }))}
+                  style={{ minWidth: 160 }}
+                  disabled={!selectedRoadmapId}
+                />
+                <input
+                  className="filter"
+                  placeholder="Goal"
+                  value={chatDraft.goal}
+                  onChange={(e) => setChatDraft((prev) => ({ ...prev, goal: e.target.value }))}
+                  style={{ flex: 1, minWidth: 200 }}
+                  disabled={!selectedRoadmapId}
+                />
+                <button
+                  className="tab"
+                  onClick={handleCreateChat}
+                  disabled={creatingChat || !sessionToken || !selectedRoadmapId}
+                  title={selectedRoadmapId ? "" : "Select a roadmap first"}
+                >
+                  {creatingChat ? "Creating…" : "+ Chat"}
+                </button>
+              </div>
+              <div className="list">
+                {chats.length === 0 && selectedRoadmapId && (
+                  <div className="item-subtle">No chats for this roadmap yet.</div>
+                )}
+                {chats.map((c) => (
+                  <div
+                    className={`item ${c.meta ? "meta" : ""} ${selectedChatId === c.id ? "active" : ""}`}
+                    key={c.id ?? c.title}
+                    onClick={() => handleSelectChat(c)}
+                    onContextMenu={(event) => openChatContextMenu(event, c)}
+                    style={{ cursor: c.id ? "pointer" : "default" }}
+                  >
+                    <div className="item-line">
+                      <span
+                        className="status-dot"
+                        style={{ background: statusColor[c.status] ?? statusColor.active }}
+                      />
+                      <span className="item-title">{c.title}</span>
+                      <span className="item-subtle">{progressPercent(c.progress)}%</span>
+                    </div>
+                    {detailMode === "expanded" && <div className="item-sub">{c.note}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div
+              className={`column main-panel ${sidebarAnimationsEnabled ? "column-animated" : ""}`}
+            >
+              <header className="column-header">
+                <span>Main Panel</span>
+                <div className="tabs">
+                  {["Chat", "Terminal", "Code"].map((tab) => (
+                    <button
+                      key={tab}
+                      className={`tab ${activeTab === tab ? "active" : ""}`}
+                      onClick={() => setActiveTab(tab as typeof activeTab)}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+              </header>
+              <div className="panel-body">{tabBody}</div>
+            </div>
+          </div>
+
+          <div className="panel-card" style={{ marginTop: 12 }}>
+            <div className="panel-title">Recent Activity</div>
+            <div className="panel-text">Latest file/terminal actions (backend DB required).</div>
+            <div className="login-row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              <select
+                className="filter"
+                value={auditProjectId}
+                onChange={(e) => setAuditProjectId(e.target.value)}
+              >
+                <option value="">All projects</option>
+                {projects
+                  .filter((p) => p.id)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+              </select>
+              <select
+                className="filter"
+                value={auditFilters.eventType}
+                onChange={(e) =>
+                  setAuditFilters((prev) => ({ ...prev, eventType: e.target.value }))
+                }
+              >
+                <option value="">Any event</option>
+                {eventTypeOptions.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="filter"
+                placeholder="User ID"
+                value={auditFilters.userId}
+                onChange={(e) => setAuditFilters((prev) => ({ ...prev, userId: e.target.value }))}
+              />
+              <input
+                className="filter"
+                placeholder="IP address"
+                value={auditFilters.ipAddress}
+                onChange={(e) =>
+                  setAuditFilters((prev) => ({ ...prev, ipAddress: e.target.value }))
+                }
+                style={{ minWidth: 140 }}
+              />
+              <input
+                className="filter"
+                placeholder="Path contains"
+                value={auditFilters.pathContains}
+                onChange={(e) =>
+                  setAuditFilters((prev) => ({ ...prev, pathContains: e.target.value }))
+                }
+                style={{ flex: 1, minWidth: 160 }}
+              />
+              <select
+                className="filter"
+                value={auditSort}
+                onChange={(e) => {
+                  const value = e.target.value === "asc" ? "asc" : "desc";
+                  setAuditSort(value);
+                }}
+              >
+                <option value="desc">Newest first</option>
+                <option value="asc">Oldest first</option>
+              </select>
+              <button
+                className="tab"
+                onClick={() => loadAuditLog(auditProjectId || undefined, { reset: true })}
+                disabled={auditLoading}
+              >
+                Apply filters
+              </button>
+              <button
+                className="ghost"
+                onClick={() => {
+                  const cleared = { eventType: "", userId: "", pathContains: "", ipAddress: "" };
+                  setAuditFilters(cleared);
+                  loadAuditLog(auditProjectId || undefined, {
+                    reset: true,
+                    filtersOverride: cleared,
+                  });
+                }}
+                disabled={auditLoading}
+              >
+                Clear
+              </button>
+            </div>
+            <div className="login-row" style={{ gap: 8, marginBottom: 8 }}>
+              <button
+                className="tab"
+                onClick={() => loadAuditLog(auditProjectId || undefined, { reset: true })}
+                disabled={auditLoading}
+              >
+                {auditLoading ? "Loading…" : "Refresh"}
+              </button>
+              <button
+                className="ghost"
+                onClick={() => loadAuditLog(auditProjectId || undefined)}
+                disabled={!auditHasMore || auditLoading}
+              >
+                {auditLoading ? "Loading…" : auditHasMore ? "Load more" : "No more events"}
+              </button>
+            </div>
+            {auditError && (
+              <div className="item-subtle" style={{ color: "#EF4444" }}>
+                {auditError}
+              </div>
+            )}
+            <div className="list" style={{ maxHeight: 260, overflow: "auto" }}>
+              {auditEvents.length === 0 && <div className="item-subtle">No audit events yet.</div>}
+              {auditEvents.map((event) => (
+                <div className="item" key={event.id}>
+                  <div className="item-line">
+                    <span className="item-title">{event.eventType}</span>
+                    <span className="item-subtle">
+                      {new Date(event.createdAt).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <div className="item-sub">{event.path ?? event.sessionId ?? "N/A"}</div>
+                  {(() => {
+                    const derivedIp =
+                      event.ipAddress ??
+                      (event.metadata &&
+                      typeof (event.metadata as Record<string, unknown>).ip === "string"
+                        ? String((event.metadata as Record<string, unknown>).ip)
+                        : null);
+                    return (
+                      <div className="item-subtle">
+                        user {event.userId ?? "—"} · session {event.sessionId ?? "—"} · project{" "}
+                        {event.projectId ?? "—"} · ip {derivedIp ?? "—"}
+                      </div>
+                    );
+                  })()}
+                  {(() => {
+                    const metaSummary = summarizeAuditMeta(event.metadata);
+                    return metaSummary ? (
+                      <div className="item-subtle">meta {metaSummary}</div>
+                    ) : null;
+                  })()}
+                </div>
+              ))}
+              {auditLoading && <div className="item-subtle">Loading…</div>}
+            </div>
+          </div>
+          {contextPanel && (
+            <div className="context-panel">
+              <div className="context-panel-header">
+                <div>
+                  <div className="context-panel-title">{contextPanelTitle}</div>
+                  <div className="item-subtle">{contextPanelSubject}</div>
+                </div>
+                <button className="ghost" onClick={() => setContextPanel(null)}>
+                  Close
+                </button>
+              </div>
+              <div className="context-panel-content">
+                {contextPanel.kind === "project-settings" ? (
+                  <>
+                    {contextPanel.loading ? (
+                      <div className="item-subtle">Loading settings…</div>
+                    ) : contextPanel.error ? (
+                      <div className="item-subtle" style={{ color: "#EF4444" }}>
+                        {contextPanel.error}
+                      </div>
+                    ) : contextPanel.details ? (
+                      <div className="context-panel-section">
+                        <div className="context-panel-list-item">
+                          <span className="context-panel-label">Status</span>
+                          <span className="item-subtle">
+                            {formatStatusLabel(contextPanel.details.project.status as Status)}
+                          </span>
+                        </div>
+                        <div className="context-panel-list-item">
+                          <span className="context-panel-label">Description</span>
+                          <span className="item-subtle">
+                            {contextPanel.details.project.description ?? "No description"}
+                          </span>
+                        </div>
+                        <div className="context-panel-list-item">
+                          <span className="context-panel-label">Roadmaps</span>
+                          <span className="item-subtle">
+                            {contextPanel.details.roadmapLists.length} configured
+                          </span>
+                        </div>
+                        {contextPanel.details.roadmapLists.length > 0 && (
+                          <div className="context-panel-roadmaps">
+                            {contextPanel.details.roadmapLists.slice(0, 3).map((roadmap) => (
+                              <div className="context-panel-list-item" key={roadmap.id}>
+                                <span>{roadmap.title}</span>
+                                <span className="item-subtle">
+                                  {progressPercent(roadmap.progress)}% ·{" "}
+                                  {formatStatusLabel(roadmap.status as Status)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="item-subtle">No project details available.</div>
+                    )}
+                  </>
+                ) : contextPanel.kind === "project-templates" ? (
+                  <TemplatePanel
+                    templates={templates}
+                    token={sessionToken ?? ""}
+                    onTemplateCreated={reloadTemplates}
+                  />
+                ) : (
+                  <>
+                    {contextPanel.loading ? (
+                      <div className="item-subtle">Loading roadmap context…</div>
+                    ) : contextPanel.error ? (
+                      <div className="item-subtle" style={{ color: "#EF4444" }}>
+                        {contextPanel.error}
+                      </div>
+                    ) : (
+                      <div className="context-panel-section">
+                        {contextPanel.notice && (
+                          <div className="item-subtle" style={{ color: "#10B981" }}>
+                            {contextPanel.notice}
+                          </div>
+                        )}
+                        <div className="context-panel-list-item">
+                          <span className="context-panel-label">Status</span>
+                          <span className="item-subtle">
+                            {formatStatusLabel(contextPanel.status ?? "active")} ·{" "}
+                            {progressPercent(contextPanel.progress ?? 0)}%
+                          </span>
+                        </div>
+                        <div className="context-panel-list-item">
+                          <span className="context-panel-label">Summary</span>
+                          <span className="item-subtle">
+                            {contextPanel.summary ?? "Summary not available yet."}
+                          </span>
+                        </div>
+                        {contextPanel.tags && contextPanel.tags.length > 0 && (
+                          <div className="context-panel-list-item">
+                            <span className="context-panel-label">Tags</span>
+                            <div className="roadmap-tags">
+                              {contextPanel.tags.map((tag) => (
+                                <span
+                                  className="item-pill"
+                                  key={`${contextPanel.roadmapId}-${tag}`}
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {(contextPanel.metaStatus || contextPanel.metaSummary) && (
+                          <div className="context-panel-list-item">
+                            <span className="context-panel-label">Meta chat</span>
+                            <span className="item-subtle">
+                              {contextPanel.metaSummary ?? "Meta summary unavailable."}
+                            </span>
+                            <span className="item-subtle">
+                              {contextPanel.metaStatus
+                                ? `${progressPercent(contextPanel.metaProgress ?? 0)}% · ${formatStatusLabel(
+                                    contextPanel.metaStatus
+                                  )}`
+                                : ""}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          {fsToast && (
+            <div className={`toast ${fsToast.tone === "error" ? "toast-error" : "toast-success"}`}>
+              <span style={{ fontWeight: 700 }}>{fsToast.message}</span>
+              {fsToast.detail && <div className="item-subtle">{fsToast.detail}</div>}
+            </div>
+          )}
+          {contextMenu && (
+            <div
+              className="context-menu"
+              style={{ top: contextMenu.y, left: contextMenu.x }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.stopPropagation()}
+            >
+              {contextActionConfig[contextMenu.type].map((action) => (
+                <button
+                  key={action.key}
+                  type="button"
+                  className="context-menu-item"
+                  onClick={() => handleContextAction(action.key)}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </main>
       )}
-    </main>
+    </>
   );
 }

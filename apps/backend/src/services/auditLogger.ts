@@ -14,7 +14,7 @@ type AuditPayload = {
 
 export async function recordAuditEvent(
   fastify: FastifyInstance & { db?: Database },
-  payload: AuditPayload,
+  payload: AuditPayload
 ) {
   if (!fastify.db) {
     fastify.log.info({ audit: payload }, "audit event");

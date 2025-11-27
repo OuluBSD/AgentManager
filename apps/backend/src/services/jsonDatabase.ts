@@ -77,7 +77,13 @@ export class JsonDatabase {
     const filePath = path.join(this.dbDir, "users.json");
     try {
       const content = await fs.readFile(filePath, "utf-8");
-      const users = JSON.parse(content) as User[];
+      const rawUsers = JSON.parse(content) as any[];
+
+      // Convert date strings to Date objects
+      const users = rawUsers.map((u) => ({
+        ...u,
+        createdAt: u.createdAt ? new Date(u.createdAt) : new Date(),
+      })) as User[];
 
       // Update cache
       for (const user of users) {
@@ -112,7 +118,14 @@ export class JsonDatabase {
     const filePath = path.join(this.dbDir, "sessions.json");
     try {
       const content = await fs.readFile(filePath, "utf-8");
-      const sessions = JSON.parse(content) as Session[];
+      const rawSessions = JSON.parse(content) as any[];
+
+      // Convert date strings to Date objects
+      const sessions = rawSessions.map((s) => ({
+        ...s,
+        expiresAt: s.expiresAt ? new Date(s.expiresAt) : null,
+        createdAt: s.createdAt ? new Date(s.createdAt) : new Date(),
+      })) as Session[];
 
       // Update cache
       for (const session of sessions) {

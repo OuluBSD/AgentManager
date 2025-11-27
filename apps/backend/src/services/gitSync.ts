@@ -11,6 +11,7 @@ import {
   dbGetMessages,
   dbGetTemplate,
   dbAddSnapshot,
+  dbRestoreProject,
 } from "./projectRepository";
 
 /**
@@ -164,10 +165,28 @@ export class GitSync {
       throw new Error(`Project ${projectId} not found in git storage`);
     }
 
-    // TODO: Insert project into database
-    // This would require database insert functions that don't exist yet
-    // Placeholder for future implementation
-    throw new Error("restoreProjectFromGit not yet implemented - requires database insert APIs");
+    // Check if project already exists in database
+    const existingProject = await dbGetProject(this.db, projectId);
+    if (existingProject) {
+      // Update existing project
+      await dbUpdateProject(this.db, projectId, {
+        name: project.name,
+        description: project.description,
+        category: project.category,
+        status: project.status,
+        theme: project.theme,
+      });
+    } else {
+      // Restore project from git storage to database with the original ID
+      await dbRestoreProject(this.db, {
+        id: projectId,
+        name: project.name,
+        description: project.description,
+        category: project.category,
+        status: project.status,
+        theme: project.theme,
+      });
+    }
   }
 
   /**
@@ -216,7 +235,7 @@ export class GitSync {
         // Sync all messages for this chat
         const messages = await dbGetMessages(this.db, chat.id);
         // Clear existing messages.jsonl and rewrite
-        const chatDir = (this.gitStorage as any).getChatDir(projectId, roadmap.id, chat.id);
+        const chatDir = this.gitStorage.getChatDir(projectId, roadmap.id, chat.id);
         const messagesFile = `${chatDir}/messages.jsonl`;
         const fs = await import("node:fs/promises");
         await fs.writeFile(messagesFile, "", "utf-8");

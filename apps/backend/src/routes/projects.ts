@@ -17,6 +17,7 @@ import {
   dbUpdateProject,
 } from "../services/projectRepository";
 import { requireSession } from "../utils/auth";
+import { recordAuditEvent } from "../services/auditLogger";
 
 export const projectRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/projects", async (request, reply) => {
@@ -25,55 +26,90 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         return await dbListProjects(fastify.db);
       } catch (err) {
-        fastify.log.error({ err }, "Failed to list projects from database; falling back to memory.");
+        fastify.log.error(
+          { err },
+          "Failed to list projects from database; falling back to memory."
+        );
       }
     }
     return listProjects();
   });
 
   fastify.post("/projects", async (request, reply) => {
-    if (!(await requireSession(request, reply))) return;
+    const session = await requireSession(request, reply);
+    if (!session) return;
+
+    const body = (request.body as Record<string, unknown>) ?? {};
+    let project;
+
     if (fastify.db) {
       try {
-        const project = await dbCreateProject(fastify.db, (request.body as Record<string, unknown>) ?? {});
+        project = await dbCreateProject(fastify.db, body);
         reply.code(201).send({ id: project.id });
-        return;
       } catch (err) {
         fastify.log.error({ err }, "Failed to create project in database; using in-memory store.");
+        project = createProject(body);
+        reply.code(201).send({ id: project.id });
       }
+    } else {
+      project = createProject(body);
+      reply.code(201).send({ id: project.id });
     }
 
-    const project = createProject((request.body as Record<string, unknown>) ?? {});
-    reply.code(201).send({ id: project.id });
+    await recordAuditEvent(fastify, {
+      userId: session.userId,
+      projectId: project.id,
+      eventType: "project:create",
+      metadata: {
+        name: project.name,
+        category: project.category,
+        status: project.status,
+      },
+    });
   });
 
   fastify.patch("/projects/:projectId", async (request, reply) => {
-    if (!(await requireSession(request, reply))) return;
-    const projectId = request.params as { projectId: string };
+    const session = await requireSession(request, reply);
+    if (!session) return;
+
+    const projectId = (request.params as { projectId: string }).projectId;
+    const body = (request.body as Record<string, unknown>) ?? {};
+    let updated;
+
     if (fastify.db) {
       try {
-        const updated = await dbUpdateProject(
-          fastify.db,
-          projectId.projectId,
-          (request.body as Record<string, unknown>) ?? {},
-        );
+        updated = await dbUpdateProject(fastify.db, projectId, body);
         if (!updated) {
           reply.code(404).send({ error: { code: "not_found", message: "Project not found" } });
           return;
         }
         reply.send(updated);
-        return;
       } catch (err) {
         fastify.log.error({ err }, "Failed to update project in database; falling back to memory.");
+        updated = updateProject(projectId, body);
+        if (!updated) {
+          reply.code(404).send({ error: { code: "not_found", message: "Project not found" } });
+          return;
+        }
+        reply.send(updated);
       }
+    } else {
+      updated = updateProject(projectId, body);
+      if (!updated) {
+        reply.code(404).send({ error: { code: "not_found", message: "Project not found" } });
+        return;
+      }
+      reply.send(updated);
     }
 
-    const updated = updateProject(projectId.projectId, (request.body as Record<string, unknown>) ?? {});
-    if (!updated) {
-      reply.code(404).send({ error: { code: "not_found", message: "Project not found" } });
-      return;
-    }
-    reply.send(updated);
+    await recordAuditEvent(fastify, {
+      userId: session.userId,
+      projectId,
+      eventType: "project:update",
+      metadata: {
+        changes: body,
+      },
+    });
   });
 
   fastify.get("/projects/:projectId/details", async (request, reply) => {
@@ -89,7 +125,10 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         reply.send(details);
         return;
       } catch (err) {
-        fastify.log.error({ err }, "Failed to fetch project details from database; falling back to memory.");
+        fastify.log.error(
+          { err },
+          "Failed to fetch project details from database; falling back to memory."
+        );
       }
     }
 
@@ -112,7 +151,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
     if (fastify.db) {
       try {
         const snapshot = await dbAddSnapshot(fastify.db, projectId, body?.message);
-        reply.code(201).send({ gitSha: snapshot.gitSha, snapshot });
+        reply.code(201).send({ gitSha: snapshot.gitSha });
         return;
       } catch (err) {
         fastify.log.error({ err }, "Failed to add snapshot in database; falling back to memory.");
@@ -120,7 +159,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const snapshot = addSnapshot(projectId, `mock-${Date.now()}`, body?.message);
-    reply.code(201).send({ gitSha: snapshot.gitSha, snapshot });
+    reply.code(201).send({ gitSha: snapshot.gitSha });
   });
 
   fastify.get("/projects/:projectId/snapshots", async (request, reply) => {
@@ -132,7 +171,10 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         reply.send(snapshots);
         return;
       } catch (err) {
-        fastify.log.error({ err }, "Failed to read snapshots from database; falling back to memory.");
+        fastify.log.error(
+          { err },
+          "Failed to read snapshots from database; falling back to memory."
+        );
       }
     }
 

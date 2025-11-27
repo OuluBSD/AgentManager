@@ -10,8 +10,8 @@
     }
   ],
   "javascriptLogic": "function aggregate(children){ const total = children.length || 1; const progress = children.reduce((acc,c)=>acc+(c.progress||0),0)/total; const blocked = children.find(c=>c.status==='blocked'||(c.errors||[]).length); const status = blocked ? 'blocked' : progress >=1 ? 'done' : 'in_progress'; return { status, progress: Number(progress.toFixed(2)), summary: blocked ? blocked.focus || blocked.errors?.[0] : 'Aggregated', blockedChild: blocked?.chatId }; }",
+  "jsonRequired": true,
   "metadata": {
-    "tags": ["meta", "aggregation"],
-    "jsonRequired": true
+    "tags": ["meta", "aggregation"]
   }
 }

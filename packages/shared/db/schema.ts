@@ -91,6 +91,17 @@ export const messages = pgTable("messages", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const metaChatMessages = pgTable("meta_chat_messages", {
+  id: serial("id").primaryKey(),
+  metaChatId: uuid("meta_chat_id")
+    .references(() => metaChats.id, { onDelete: "cascade" })
+    .notNull(),
+  role: varchar("role", { length: 16 }).notNull(), // user | assistant | system | status
+  content: text("content").notNull(),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const snapshots = pgTable("snapshots", {
   id: uuid("id").defaultRandom().primaryKey(),
   projectId: uuid("project_id")
