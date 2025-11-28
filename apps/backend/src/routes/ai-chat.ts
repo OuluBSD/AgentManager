@@ -40,6 +40,7 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         if (connection.socket.readyState === connection.socket.OPEN) {
           if (msg.type === "conversation" && msg.role === "assistant") {
             if (msg.isStreaming !== false) {
+              // Streaming chunk - accumulate content
               streamingContent += msg.content;
               connection.socket.send(
                 JSON.stringify({
@@ -48,14 +49,31 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
                 })
               );
             } else {
-              connection.socket.send(
-                JSON.stringify({
-                  ...msg,
-                  content: streamingContent,
-                })
-              );
+              // Final message - only send if we haven't already sent this content
+              // (avoid duplicate empty message)
+              if (msg.content || streamingContent === "") {
+                streamingContent += msg.content;
+                connection.socket.send(
+                  JSON.stringify({
+                    ...msg,
+                    content: streamingContent,
+                  })
+                );
+              }
               streamingContent = "";
             }
+          } else if (msg.type === "tool_group") {
+            // Auto-approve tool execution
+            fastify.log.info(
+              `[AIChat] Auto-approving tool group ${msg.id} with ${msg.tools.length} tools`
+            );
+            qwenClient.send({
+              type: "tool_approval",
+              approved: true,
+              toolGroupId: msg.id,
+            });
+            // Forward tool group message to client
+            connection.socket.send(JSON.stringify(msg));
           } else {
             connection.socket.send(JSON.stringify(msg));
           }

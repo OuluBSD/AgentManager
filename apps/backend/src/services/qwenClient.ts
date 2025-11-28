@@ -55,13 +55,24 @@ export interface QwenCompletionStats {
   completion_tokens?: number;
 }
 
+export interface QwenToolGroup {
+  type: "tool_group";
+  tools: Array<{
+    id: string;
+    name: string;
+    input: Record<string, any>;
+  }>;
+  id: number;
+}
+
 export type QwenServerMessage =
   | QwenInitMessage
   | QwenConversationMessage
   | QwenStatusUpdate
   | QwenInfoMessage
   | QwenErrorMessage
-  | QwenCompletionStats;
+  | QwenCompletionStats
+  | QwenToolGroup;
 
 // Client commands
 export interface QwenUserInput {
@@ -73,7 +84,13 @@ export interface QwenInterrupt {
   type: "interrupt";
 }
 
-export type QwenCommand = QwenUserInput | QwenInterrupt;
+export interface QwenToolApproval {
+  type: "tool_approval";
+  approved: boolean;
+  toolGroupId: number;
+}
+
+export type QwenCommand = QwenUserInput | QwenInterrupt | QwenToolApproval;
 
 export type QwenMode = "stdio" | "tcp";
 
