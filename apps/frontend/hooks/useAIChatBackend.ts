@@ -28,7 +28,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const streamingContentRef = useRef("");
+  const [streamingContent, setStreamingContent] = useState("");
   const nextMessageId = useRef(1);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -105,7 +105,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     setMessages((prev) => [...prev, userMessage]);
     setStatus("responding");
     setIsStreaming(true);
-    streamingContentRef.current = "";
+    setStreamingContent("");
 
     wsRef.current.send(
       JSON.stringify({
@@ -133,50 +133,84 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
   }, []);
 
   // Handle messages from backend
-  const handleBackendMessage = useCallback((msg: any) => {
-    switch (msg.type) {
-      case "init":
-        setStatus("idle");
-        setStatusMessage(`Connected to ${msg.model || "AI"}`);
-        break;
+  const handleBackendMessage = useCallback(
+    (msg: any) => {
+      switch (msg.type) {
+        case "init":
+          setStatus("idle");
+          setStatusMessage(`Connected to ${msg.model || "AI"}`);
+          break;
 
-      case "conversation":
-        if (msg.role === "assistant") {
-          if (msg.isStreaming !== false) {
-            // Streaming chunk
-            streamingContentRef.current = msg.content || "";
-          } else {
-            // Streaming ended
-            const assistantMessage: ChatMessage = {
-              id: nextMessageId.current++,
-              role: "assistant",
-              content: streamingContentRef.current,
-              timestamp: Date.now(),
-            };
-            setMessages((prev) => [...prev, assistantMessage]);
-            setIsStreaming(false);
-            setStatus("idle");
-            streamingContentRef.current = "";
+        case "conversation":
+          if (msg.role === "assistant") {
+            if (msg.isStreaming !== false) {
+              // Streaming chunk - update streaming content state
+              setStreamingContent(msg.content || "");
+              setIsStreaming(true);
+            } else {
+              // Streaming ended - finalize message
+              const finalContent = streamingContent || msg.content || "";
+              if (finalContent) {
+                const assistantMessage: ChatMessage = {
+                  id: nextMessageId.current++,
+                  role: "assistant",
+                  content: finalContent,
+                  timestamp: Date.now(),
+                };
+                setMessages((prev) => [...prev, assistantMessage]);
+              }
+              setIsStreaming(false);
+              setStatus("idle");
+              setStatusMessage("Ready");
+              setStreamingContent("");
+            }
           }
-        }
-        break;
+          break;
 
-      case "status":
-        if (msg.state) {
-          setStatus(msg.state as ChatStatus);
-        }
-        if (msg.message) {
-          setStatusMessage(msg.message);
-        }
-        break;
+        case "status":
+          if (msg.state) {
+            // Map Qwen states to our ChatStatus
+            const stateMap: Record<string, ChatStatus> = {
+              idle: "idle",
+              responding: "responding",
+              waiting_for_confirmation: "responding",
+            };
+            setStatus(stateMap[msg.state] || "idle");
+          }
+          if (msg.message) {
+            setStatusMessage(msg.message);
+          }
+          // If we receive idle status while streaming, finalize the message
+          if (msg.state === "idle" && isStreaming) {
+            const finalContent = streamingContent;
+            if (finalContent) {
+              const assistantMessage: ChatMessage = {
+                id: nextMessageId.current++,
+                role: "assistant",
+                content: finalContent,
+                timestamp: Date.now(),
+              };
+              setMessages((prev) => [...prev, assistantMessage]);
+            }
+            setIsStreaming(false);
+            setStreamingContent("");
+          }
+          break;
 
-      case "error":
-        setStatus("error");
-        setStatusMessage(msg.message || "An error occurred");
-        setIsStreaming(false);
-        break;
-    }
-  }, []);
+        case "error":
+          setStatus("error");
+          setStatusMessage(msg.message || "An error occurred");
+          setIsStreaming(false);
+          break;
+
+        case "tool_group":
+          // Tool execution notification
+          setStatusMessage(`Executing ${msg.tools?.length || 0} tool(s)...`);
+          break;
+      }
+    },
+    [isStreaming, streamingContent]
+  );
 
   // Auto-connect on mount
   useEffect(() => {
@@ -192,7 +226,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     status,
     statusMessage,
     isStreaming,
-    streamingContent: streamingContentRef.current,
+    streamingContent,
     connect,
     disconnect,
     sendMessage,
