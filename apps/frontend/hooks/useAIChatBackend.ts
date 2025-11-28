@@ -121,16 +121,29 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       return;
     }
 
+    // Send interrupt to backend
     wsRef.current.send(
       JSON.stringify({
         type: "interrupt",
       })
     );
 
+    // Finalize any streaming content before clearing
+    if (isStreaming && streamingContent) {
+      const assistantMessage: ChatMessage = {
+        id: nextMessageId.current++,
+        role: "assistant",
+        content: streamingContent,
+        timestamp: Date.now(),
+      };
+      setMessages((prev) => [...prev, assistantMessage]);
+    }
+
     setIsStreaming(false);
+    setStreamingContent("");
     setStatus("idle");
     setStatusMessage("Interrupted");
-  }, []);
+  }, [isStreaming, streamingContent]);
 
   // Handle messages from backend
   const handleBackendMessage = useCallback(
