@@ -34,6 +34,9 @@ const qwenPluginFunction: FastifyPluginAsync = async (fastify) => {
 
   fastify.log.info(`[QwenPlugin] Starting Qwen client in ${mode} mode`);
 
+  // Clean up any orphaned processes from previous runs
+  QwenClient.cleanupOrphanedProcesses();
+
   try {
     // Create client
     const client = new QwenClient({

@@ -11,6 +11,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as net from "node:net";
 import * as readline from "node:readline";
+import { writeFileSync, unlinkSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // Protocol message types (matching qwen-code protocol)
 export interface QwenInitMessage {
@@ -58,9 +60,15 @@ export interface QwenCompletionStats {
 export interface QwenToolGroup {
   type: "tool_group";
   tools: Array<{
-    id: string;
-    name: string;
-    input: Record<string, any>;
+    type: "tool_call";
+    tool_id: string; // Changed from 'id' to 'tool_id' to match actual protocol
+    tool_name: string;
+    status: string;
+    args: Record<string, any>;
+    confirmation_details?: {
+      message: string;
+      requires_approval: boolean;
+    };
   }>;
   id: number;
 }
@@ -87,7 +95,7 @@ export interface QwenInterrupt {
 export interface QwenToolApproval {
   type: "tool_approval";
   approved: boolean;
-  toolGroupId: number;
+  tool_id: string; // Individual tool ID (from tools array), not tool group ID
 }
 
 export type QwenCommand = QwenUserInput | QwenInterrupt | QwenToolApproval;
@@ -114,6 +122,13 @@ export interface QwenClientConfig {
  * - Cleanup on errors and disconnection
  */
 export class QwenClient {
+  private static readonly PID_FILE = join(
+    process.env.HOME || process.env.USERPROFILE || "",
+    ".config",
+    "agent-manager",
+    "qwen.pid"
+  );
+
   private config: Required<QwenClientConfig>;
   private process: ChildProcess | null = null;
   private socket: net.Socket | null = null;
@@ -122,12 +137,43 @@ export class QwenClient {
   private connected = false;
   private initReceived = false;
 
+  /**
+   * Clean up any orphaned qwen processes from previous runs
+   */
+  static cleanupOrphanedProcesses(): void {
+    try {
+      if (existsSync(QwenClient.PID_FILE)) {
+        const pid = parseInt(readFileSync(QwenClient.PID_FILE, "utf-8").trim(), 10);
+        if (pid && !isNaN(pid)) {
+          try {
+            // Check if process exists and kill it
+            process.kill(pid, "SIGTERM");
+            console.log(`[QwenClient] Killed orphaned qwen process ${pid}`);
+          } catch (err: any) {
+            // Process doesn't exist (ESRCH) or no permission (EPERM)
+            if (err.code !== "ESRCH") {
+              console.error(`[QwenClient] Failed to kill orphaned process ${pid}:`, err);
+            }
+          }
+        }
+        unlinkSync(QwenClient.PID_FILE);
+      }
+    } catch (err) {
+      console.error("[QwenClient] Error cleaning up orphaned processes:", err);
+    }
+  }
+
   addMessageHandler(handler: (msg: QwenServerMessage) => void) {
     this.messageHandlers.push(handler);
+    console.log(`[QwenClient] Added handler, total handlers: ${this.messageHandlers.length}`);
   }
 
   removeMessageHandler(handler: (msg: QwenServerMessage) => void) {
+    const before = this.messageHandlers.length;
     this.messageHandlers = this.messageHandlers.filter((h) => h !== handler);
+    console.log(
+      `[QwenClient] Removed handler, before: ${before}, after: ${this.messageHandlers.length}`
+    );
   }
 
   constructor(config: QwenClientConfig = {}) {
@@ -164,13 +210,27 @@ export class QwenClient {
   private async startStdioMode(): Promise<void> {
     console.log(`[QwenClient] Starting stdio mode: ${this.config.qwenPath}`);
 
-    this.process = spawn(this.config.qwenPath, ["--server-mode", "stdin"], {
-      stdio: ["pipe", "pipe", "inherit"],
-      cwd: this.config.workspaceRoot,
-      env: {
-        ...process.env,
-      },
-    });
+    this.process = spawn(
+      this.config.qwenPath,
+      ["--server-mode", "stdin", "--approval-mode", "yolo"],
+      {
+        stdio: ["pipe", "pipe", "inherit"],
+        cwd: this.config.workspaceRoot,
+        env: {
+          ...process.env,
+        },
+      }
+    );
+
+    // Write PID file for cleanup
+    if (this.process.pid) {
+      try {
+        writeFileSync(QwenClient.PID_FILE, this.process.pid.toString(), "utf-8");
+        console.log(`[QwenClient] Wrote PID ${this.process.pid} to ${QwenClient.PID_FILE}`);
+      } catch (err) {
+        console.error("[QwenClient] Failed to write PID file:", err);
+      }
+    }
 
     // Handle process exit
     this.process.on("exit", (code, signal) => {
@@ -469,6 +529,16 @@ export class QwenClient {
     if (this.process) {
       this.process.kill();
       this.process = null;
+    }
+
+    // Remove PID file
+    try {
+      if (existsSync(QwenClient.PID_FILE)) {
+        unlinkSync(QwenClient.PID_FILE);
+        console.log("[QwenClient] Removed PID file");
+      }
+    } catch (err) {
+      console.error("[QwenClient] Failed to remove PID file:", err);
     }
 
     this.messageHandlers = [];

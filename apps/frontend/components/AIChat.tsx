@@ -63,12 +63,20 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
     token: sessionToken || "",
   });
 
-  // Auto-connect when session token is available
+  // Auto-connect when session token is available and disconnect on session change
   useEffect(() => {
-    if (sessionToken && !isConnected) {
+    if (sessionToken) {
+      // Disconnect any existing connection when session changes
+      disconnect();
+      // Then connect to the new session
       connect();
     }
-  }, [sessionToken, isConnected, connect]);
+
+    // Cleanup on unmount
+    return () => {
+      disconnect();
+    };
+  }, [sessionToken, activeSessionId, connect, disconnect]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {

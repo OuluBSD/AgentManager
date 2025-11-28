@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
 export interface MetaChatStatus {
   roadmapId: string;
@@ -50,6 +50,18 @@ export function useMetaChatWebSocket({
   const maxReconnectDelay = 30000; // 30 seconds max backoff
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Use refs for callbacks to avoid dependency issues
+  const onStatusUpdateRef = useRef(onStatusUpdate);
+  const onMessageRef = useRef(onMessage);
+  const onErrorRef = useRef(onError);
+
+  // Update refs when callbacks change
+  useEffect(() => {
+    onStatusUpdateRef.current = onStatusUpdate;
+    onMessageRef.current = onMessage;
+    onErrorRef.current = onError;
+  }, [onStatusUpdate, onMessage, onError]);
+
   useEffect(() => {
     // Don't connect if disabled or missing required params
     if (!enabled || !roadmapId || !sessionToken) {
@@ -69,15 +81,16 @@ export function useMetaChatWebSocket({
         reconnectTimeoutRef.current = null;
       }
 
-      // Determine WebSocket protocol (ws:// or wss://)
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const host = window.location.host;
+      // Get backend URL from environment variable, matching how other API calls work
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_HTTP_BASE || "http://localhost:3001";
 
-      // Build WebSocket URL with token as query param for auth
-      const wsUrl = `${protocol}//${host}/api/roadmaps/${roadmapId}/meta-chat/stream?token=${encodeURIComponent(
-        sessionToken ?? ""
-      )}`;
+      // Convert HTTP URL to WebSocket URL
+      const wsUrl =
+        backendUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:") +
+        `/api/roadmaps/${roadmapId}/meta-chat/stream?token=${encodeURIComponent(sessionToken ?? "")}`;
 
+      console.log(`[MetaChatWS] Backend URL: ${backendUrl}`);
+      console.log(`[MetaChatWS] WebSocket URL: ${wsUrl}`);
       console.log(`[MetaChatWS] Connecting to ${roadmapId}...`);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -102,20 +115,20 @@ export function useMetaChatWebSocket({
           // Handle different message types
           switch (data.type) {
             case "meta-chat:status":
-              if (onStatusUpdate) {
-                onStatusUpdate(data.data as MetaChatStatus);
+              if (onStatusUpdateRef.current) {
+                onStatusUpdateRef.current(data.data as MetaChatStatus);
               }
               break;
 
             case "meta-chat:updated":
-              if (onStatusUpdate) {
-                onStatusUpdate(data.data as MetaChatStatus);
+              if (onStatusUpdateRef.current) {
+                onStatusUpdateRef.current(data.data as MetaChatStatus);
               }
               break;
 
             case "meta-chat:message":
-              if (onMessage) {
-                onMessage(data.data as MetaChatMessage);
+              if (onMessageRef.current) {
+                onMessageRef.current(data.data as MetaChatMessage);
               }
               break;
 
@@ -134,8 +147,8 @@ export function useMetaChatWebSocket({
       ws.onerror = (event) => {
         console.error(`[MetaChatWS] Error on ${roadmapId}:`, event);
         setIsConnected(false);
-        if (onError) {
-          onError(event);
+        if (onErrorRef.current) {
+          onErrorRef.current(event);
         }
       };
 
@@ -198,7 +211,7 @@ export function useMetaChatWebSocket({
 
       setIsConnected(false);
     };
-  }, [roadmapId, sessionToken, enabled, onStatusUpdate, onMessage, onError]);
+  }, [roadmapId, sessionToken, enabled]); // Removed callback deps - using refs instead
 
   return { isConnected };
 }
