@@ -312,6 +312,7 @@ AI Integration Implementation:
 
 ## Recent Notes
 
+- Fixed the auto-demo chat selector initialization order so the Chat tab no longer throws a `ReferenceError` on `isAutoDemoChat` during render (apps/frontend/app/[[...segments]]/page.tsx).
 - Embedded the auto-demo Qwen workspace flow directly into the Chat tab for the auto-demo chat (inline manager/server/AI pills, CLI/diff previews, and the qwen run button) against the `~/.config/agent-manager/auto-demo/qwen-backend` repo.
 - Styled the Agent Manager auto demo CLI preview so diff blocks render with line-level colors (add/delete/hunk/meta) for easier visual scanning.
 - Seeded a git-backed Qwen backend demo project and starter chat metadata so the inline auto-demo flow has workspace/repo hints baked in.

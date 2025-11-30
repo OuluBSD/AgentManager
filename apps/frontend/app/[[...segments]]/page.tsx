@@ -948,6 +948,22 @@ export default function Page() {
     applyThemePalette(activePalette);
   }, [activePalette]);
 
+  const selectedChat = chats.find((c) => c.id === selectedChatId);
+  const isMetaChatSelected = selectedChat?.meta;
+  const templateForChat = selectedChat?.templateId
+    ? templates.find((t) => t.id === selectedChat.templateId)
+    : null;
+  const folderHint = resolveChatFolder(selectedChat);
+  const repoHint = resolveChatRepo(selectedChat);
+  const managerHint = resolveChatManager(selectedChat);
+  const serverHint = resolveChatServer(selectedChat);
+  const aiChatHint = resolveChatAiChat(selectedChat);
+  const isAutoDemoChat =
+    !!selectedChat &&
+    (readWorkspacePath(selectedChat.metadata) === autoDemoWorkspace.path ||
+      folderHint === autoDemoWorkspace.path ||
+      repoHint === autoDemoWorkspace.repo);
+
   useEffect(() => {
     if (autoDemoAiEnabled && sessionToken) {
       connectAutoDemo();
@@ -3127,21 +3143,6 @@ export default function Page() {
     }
   }, [selectedProjectId, auditProjectId]);
 
-  const selectedChat = chats.find((c) => c.id === selectedChatId);
-  const isMetaChatSelected = selectedChat?.meta;
-  const templateForChat = selectedChat?.templateId
-    ? templates.find((t) => t.id === selectedChat.templateId)
-    : null;
-  const folderHint = resolveChatFolder(selectedChat);
-  const repoHint = resolveChatRepo(selectedChat);
-  const managerHint = resolveChatManager(selectedChat);
-  const serverHint = resolveChatServer(selectedChat);
-  const aiChatHint = resolveChatAiChat(selectedChat);
-  const isAutoDemoChat =
-    !!selectedChat &&
-    (readWorkspacePath(selectedChat.metadata) === autoDemoWorkspace.path ||
-      folderHint === autoDemoWorkspace.path ||
-      repoHint === autoDemoWorkspace.repo);
   const roadmapMeta = selectedRoadmapId ? metaChats[selectedRoadmapId] : null;
   const roadmapSummary = selectedRoadmapId ? roadmapStatus[selectedRoadmapId] : null;
   const siblingTasks = chats.filter((chat) => !chat.meta && chat.id && chat.id !== selectedChatId);
