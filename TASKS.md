@@ -312,6 +312,7 @@ AI Integration Implementation:
 
 ## Recent Notes
 
+- Extended the Automatic Demo card to seed two chats (including an FS API task) with attached manager/server/AI chat metadata, new CLI previews, and visible manager/server/AI pills alongside workspace/repo hints.
 - Styled the Agent Manager auto demo CLI preview so diff blocks render with line-level colors (add/delete/hunk/meta) for easier visual scanning.
 - Added an "Automatic Demo" workspace card in Agent Manager that seeds a git-backed Qwen backend demo project (workspace path + repo metadata) and a starter chat with CLI-style command/diff previews.
 - Adjusted challenge mode bootstrap to send a silent system-style instruction and suppress the initial AI echo so users no longer see the setup blurb when connecting.

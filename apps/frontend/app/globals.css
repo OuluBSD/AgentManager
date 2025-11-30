@@ -482,6 +482,33 @@ body {
   color: #e2e8f0;
 }
 
+.demo-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.demo-attachment {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.demo-attachment-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.demo-attachment-value {
+  color: #e0f2fe;
+  font-weight: 600;
+  font-size: 14px;
+}
+
 .panel-title {
   font-weight: 800;
   font-size: 18px;

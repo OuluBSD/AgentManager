@@ -289,6 +289,9 @@ type GlobalThemeMode = "auto" | "dark" | "light";
 const autoDemoWorkspace = {
   path: "/workspace/auto-demo/qwen-backend",
   repo: "git@github.com/project-nexus/auto-demo.git",
+  manager: "agent-manager (manager process)",
+  server: "qwen-backend server",
+  aiChat: "AI chat: qwen-backend",
 };
 
 type DemoSeedChat = {
@@ -363,6 +366,9 @@ const demoSeeds: {
         metadata: {
           workspacePath: autoDemoWorkspace.path,
           gitRepo: autoDemoWorkspace.repo,
+          manager: autoDemoWorkspace.manager,
+          server: autoDemoWorkspace.server,
+          aiChat: autoDemoWorkspace.aiChat,
         },
         starterMessages: [
           {
@@ -374,6 +380,32 @@ const demoSeeds: {
             role: "assistant",
             content:
               '✦ Now let me check the differences in the C++ file:\n\n```bash\n# Shell\ngit diff uppsrc/Qwen/QwenTCPServer.cpp\n```\n\n```\ndiff --git a/uppsrc/Qwen/QwenTCPServer.cpp b/uppsrc/Qwen/QwenTCPServer.cpp\nindex 844a81a2..02744353 100644\n--- a/uppsrc/Qwen/QwenTCPServer.cpp\n+++ b/uppsrc/Qwen/QwenTCPServer.cpp\n@@ -208,7 +208,7 @@ bool QwenTCPServer::start(int port, const std::string& host) {\n              // In a real implementation, we would route to the specific client that made the request\n              std::string response = "{";\n              response += "\\"type\\":\\"assistant_response\\",";\n-             response += "\\"content\\":" + std::string("\\"") + msg.content + std::string("\\"");\n+             response += "\\"content\\":\\"" + json_escape(msg.content) + "\\"";\n              response += "}\\n";\n \n              // Send to all connected clients\n```\n',
+          },
+        ],
+      },
+      {
+        title: "Implement FS API",
+        goal: "Follow the qwen-backend session to implement a filesystem API in the demo repo.",
+        status: "in_progress" as Status,
+        progress: 0.22,
+        metadata: {
+          focus: "Write FS API code into the auto-demo git repo",
+          workspacePath: autoDemoWorkspace.path,
+          gitRepo: autoDemoWorkspace.repo,
+          manager: autoDemoWorkspace.manager,
+          server: autoDemoWorkspace.server,
+          aiChat: autoDemoWorkspace.aiChat,
+        },
+        starterMessages: [
+          {
+            role: "assistant",
+            content:
+              "✦ Setting up the auto-demo workspace and manager/server links:\n\n```bash\n# Shell\ncd /workspace/auto-demo/qwen-backend\nls -la\n```\n\nAttached: manager, server, ai-chat and git repo.",
+          },
+          {
+            role: "assistant",
+            content:
+              '✦ Drafting the filesystem API handler:\n\n```bash\n# Shell\necho "// FS API demo stub" > api/fs_api.cpp\n```\n\n```\ndiff --git a/api/fs_api.cpp b/api/fs_api.cpp\nnew file mode 100644\n--- /dev/null\n+++ b/api/fs_api.cpp\n@@\n+#include <string>\n+#include <filesystem>\n+\n+std::string listDir(const std::string& root) {\n+    std::string out;\n+    for (const auto& entry : std::filesystem::directory_iterator(root)) {\n+        out += entry.path().string();\n+        out += \"\\n\";\n+    }\n+    return out;\n+}\n```\n',
           },
         ],
       },
@@ -394,6 +426,60 @@ type DemoStep = {
 };
 
 const qwenCliPreview: DemoStep[] = [
+  {
+    id: "fs-api",
+    headline: "Implement FS API in the auto-demo repo with manager/server/ai-chat attached:",
+    items: [
+      {
+        kind: "text",
+        content:
+          "The new auto chat seeds with links to the manager, backend server, and AI chat and starts writing into /workspace/auto-demo/qwen-backend.",
+      },
+      {
+        kind: "command",
+        title: "Shell prepare FS API stub",
+        content: [
+          "cd /workspace/auto-demo/qwen-backend",
+          "mkdir -p api",
+          "cat <<'EOF' > api/fs_api.cpp",
+          "#include <string>",
+          "#include <filesystem>",
+          "",
+          "std::string listDir(const std::string& root) {",
+          "    std::string out;",
+          "    for (const auto& entry : std::filesystem::directory_iterator(root)) {",
+          "        out += entry.path().string();",
+          '        out += "\\n";',
+          "    }",
+          "    return out;",
+          "}",
+          "EOF",
+        ].join("\n"),
+      },
+      {
+        kind: "diff",
+        title: "Diff text",
+        content: [
+          "diff --git a/api/fs_api.cpp b/api/fs_api.cpp",
+          "new file mode 100644",
+          "--- /dev/null",
+          "+++ b/api/fs_api.cpp",
+          "@@",
+          "#include <string>",
+          "#include <filesystem>",
+          "",
+          "std::string listDir(const std::string& root) {",
+          "    std::string out;",
+          "    for (const auto& entry : std::filesystem::directory_iterator(root)) {",
+          "        out += entry.path().string();",
+          '        out += "\\n";',
+          "    }",
+          "    return out;",
+          "}",
+        ].join("\n"),
+      },
+    ],
+  },
   {
     id: "stage-file",
     headline: "I need to stage the modified file that is not staged yet:",
@@ -625,14 +711,17 @@ function readWorkspacePath(meta?: Record<string, unknown> | null) {
   return null;
 }
 
-function readGitRepo(meta?: Record<string, unknown> | null) {
+function readMetadataString(meta: Record<string, unknown> | null | undefined, keys: string[]) {
   if (!meta) return null;
-  const fields = ["gitRepo", "repo", "repository", "git"];
-  for (const key of fields) {
+  for (const key of keys) {
     const value = (meta as Record<string, unknown>)[key];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return null;
+}
+
+function readGitRepo(meta?: Record<string, unknown> | null) {
+  return readMetadataString(meta ?? null, ["gitRepo", "repo", "repository", "git"]);
 }
 
 export default function Page() {
@@ -645,7 +734,8 @@ export default function Page() {
   const [chats, setChats] = useState<ChatItem[]>([]);
   const [templates, setTemplates] = useState<TemplateItem[]>([]);
   const autoDemoSeed = useMemo(() => demoSeeds.find((seed) => seed.key === "auto-demo"), []);
-  const autoDemoChatTitle = autoDemoSeed?.chats[0]?.title ?? "Wire Qwen backend";
+  const autoDemoChatLabel =
+    autoDemoSeed?.chats.map((chat) => chat.title).join(", ") ?? "Wire Qwen backend";
   const autoDemoRoadmapTitle = autoDemoSeed?.roadmap.title ?? "Qwen Backend";
   const resolveChatFolder = useCallback(
     (chat?: ChatItem | null) => {
@@ -666,6 +756,59 @@ export default function Page() {
       if (!chat.templateId) return null;
       const template = templates.find((t) => t.id === chat.templateId);
       return readGitRepo(template?.metadata ?? null);
+    },
+    [templates]
+  );
+  const resolveChatManager = useCallback(
+    (chat?: ChatItem | null) => {
+      if (!chat) return null;
+      const directManager = readMetadataString(chat.metadata ?? null, [
+        "manager",
+        "managerServer",
+        "managerUrl",
+        "managerHost",
+      ]);
+      if (directManager) return directManager;
+      if (!chat.templateId) return null;
+      const template = templates.find((t) => t.id === chat.templateId);
+      return readMetadataString(template?.metadata ?? null, [
+        "manager",
+        "managerServer",
+        "managerUrl",
+        "managerHost",
+      ]);
+    },
+    [templates]
+  );
+  const resolveChatServer = useCallback(
+    (chat?: ChatItem | null) => {
+      if (!chat) return null;
+      const directServer = readMetadataString(chat.metadata ?? null, [
+        "server",
+        "worker",
+        "backend",
+        "apiServer",
+      ]);
+      if (directServer) return directServer;
+      if (!chat.templateId) return null;
+      const template = templates.find((t) => t.id === chat.templateId);
+      return readMetadataString(template?.metadata ?? null, [
+        "server",
+        "worker",
+        "backend",
+        "apiServer",
+      ]);
+    },
+    [templates]
+  );
+  const resolveChatAiChat = useCallback(
+    (chat?: ChatItem | null) => {
+      if (!chat) return null;
+      const directAi = readMetadataString(chat.metadata ?? null, ["aiChat", "ai", "assistant"]);
+      if (directAi) return directAi;
+      if (!chat.templateId) return null;
+      const template = templates.find((t) => t.id === chat.templateId);
+      return readMetadataString(template?.metadata ?? null, ["aiChat", "ai", "assistant"]);
     },
     [templates]
   );
@@ -2932,6 +3075,9 @@ export default function Page() {
     : null;
   const folderHint = resolveChatFolder(selectedChat);
   const repoHint = resolveChatRepo(selectedChat);
+  const managerHint = resolveChatManager(selectedChat);
+  const serverHint = resolveChatServer(selectedChat);
+  const aiChatHint = resolveChatAiChat(selectedChat);
   const roadmapMeta = selectedRoadmapId ? metaChats[selectedRoadmapId] : null;
   const roadmapSummary = selectedRoadmapId ? roadmapStatus[selectedRoadmapId] : null;
   const siblingTasks = chats.filter((chat) => !chat.meta && chat.id && chat.id !== selectedChatId);
@@ -3237,6 +3383,21 @@ export default function Page() {
                 </span>
               ) : (
                 <span className="item-subtle">Repo: pending</span>
+              )}
+              {managerHint && (
+                <span className="item-pill" title={managerHint}>
+                  Manager: {managerHint}
+                </span>
+              )}
+              {serverHint && (
+                <span className="item-pill" title={serverHint}>
+                  Server: {serverHint}
+                </span>
+              )}
+              {aiChatHint && (
+                <span className="item-pill" title={aiChatHint}>
+                  AI chat: {aiChatHint}
+                </span>
               )}
               {roadmapSummary && (
                 <span className="item-pill" title={roadmapSummary.summary ?? ""}>
@@ -3654,18 +3815,32 @@ export default function Page() {
                 </div>
                 <div className="panel-text">
                   Follow the qwen-backend in a dedicated demo project with its own folder, git repo,
-                  and a chat that already starts writing code.
+                  and chats that already start writing code.
                 </div>
               </div>
               <div className="demo-pills">
                 <span className="item-pill">Workspace: {autoDemoWorkspace.path}</span>
                 <span className="item-pill">Repo: {autoDemoWorkspace.repo}</span>
-                <span className="item-pill">Chat: {autoDemoChatTitle}</span>
+                <span className="item-pill">Chats: {autoDemoChatLabel}</span>
+              </div>
+            </div>
+            <div className="demo-attachments">
+              <div className="demo-attachment">
+                <div className="demo-attachment-label">Manager</div>
+                <div className="demo-attachment-value">{autoDemoWorkspace.manager}</div>
+              </div>
+              <div className="demo-attachment">
+                <div className="demo-attachment-label">Server</div>
+                <div className="demo-attachment-value">{autoDemoWorkspace.server}</div>
+              </div>
+              <div className="demo-attachment">
+                <div className="demo-attachment-label">AI Chat</div>
+                <div className="demo-attachment-value">{autoDemoWorkspace.aiChat}</div>
               </div>
             </div>
             <div className="panel-text">
-              The roadmap list now contains a <strong>{autoDemoRoadmapTitle}</strong> entry with a
-              new chat that opens on these CLI-style steps:
+              The roadmap list now contains a <strong>{autoDemoRoadmapTitle}</strong> entry with
+              auto-chats that open on these CLI-style steps:
             </div>
             <div className="demo-steps">
               {qwenCliPreview.map((step) => (
