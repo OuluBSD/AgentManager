@@ -509,6 +509,62 @@ body {
   font-size: 14px;
 }
 
+.demo-ai-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.demo-ai-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.demo-ai-stream {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 10px;
+  min-height: 110px;
+}
+
+.demo-ai-stream-title {
+  font-weight: 700;
+  color: #e0f2fe;
+  margin-bottom: 6px;
+}
+
+.demo-ai-line {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: rgba(30, 41, 59, 0.55);
+}
+
+.demo-ai-role {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-right: 6px;
+  color: #94a3b8;
+}
+
+.demo-ai-user {
+  color: #cbd5e1;
+}
+
+.demo-ai-assistant {
+  color: #e0f2fe;
+}
+
+.demo-ai-system {
+  color: #a5b4fc;
+}
+
 .panel-title {
   font-weight: 800;
   font-size: 18px;

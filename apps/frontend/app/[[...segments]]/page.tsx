@@ -52,6 +52,7 @@ import { useMetaChatWebSocket } from "../../hooks/useMetaChatWebSocket";
 import { TopMenuBar, type AppSection } from "../../components/TopMenuBar";
 import { AIChat } from "../../components/AIChat";
 import { Network } from "../../components/Network";
+import { useAIChatBackend } from "../../hooks/useAIChatBackend";
 
 type Status =
   | "inactive"
@@ -287,8 +288,10 @@ const projectThemePresetLabels: Record<ProjectThemePresetKey, string> = {
 type GlobalThemeMode = "auto" | "dark" | "light";
 
 const autoDemoWorkspace = {
-  path: "/workspace/auto-demo/qwen-backend",
-  repo: "git@github.com/project-nexus/auto-demo.git",
+  path:
+    process.env.NEXT_PUBLIC_AUTO_DEMO_PATH ??
+    `${process.env.HOME ? `${process.env.HOME}/.config/agent-manager/auto-demo/qwen-backend` : "~/.config/agent-manager/auto-demo/qwen-backend"}`,
+  repo: "local git repo in ~/.config/agent-manager/auto-demo/qwen-backend",
   manager: "agent-manager (manager process)",
   server: "qwen-backend server",
   aiChat: "AI chat: qwen-backend",
@@ -903,6 +906,24 @@ export default function Page() {
     pathContains: "",
     ipAddress: "",
   });
+  const {
+    messages: autoDemoMessages,
+    status: autoDemoStatus,
+    statusMessage: autoDemoStatusMessage,
+    streamingContent: autoDemoStreaming,
+    connect: connectAutoDemo,
+    disconnect: disconnectAutoDemo,
+    sendMessage: sendAutoDemoMessage,
+    isConnected: isAutoDemoConnected,
+  } = useAIChatBackend({
+    backend: "qwen",
+    sessionId: "auto-demo-fs",
+    token: sessionToken ?? "",
+    allowChallenge: true,
+  });
+  const [autoDemoAiEnabled, setAutoDemoAiEnabled] = useState(false);
+  const [autoDemoKickoffSent, setAutoDemoKickoffSent] = useState(false);
+  const [autoDemoLog, setAutoDemoLog] = useState<string>("Idle.");
   const [auditProjectId, setAuditProjectId] = useState<string>("");
   const [auditSort, setAuditSort] = useState<"asc" | "desc">("desc");
   const [auditError, setAuditError] = useState<string | null>(null);
@@ -924,6 +945,33 @@ export default function Page() {
   useEffect(() => {
     applyThemePalette(activePalette);
   }, [activePalette]);
+
+  useEffect(() => {
+    if (autoDemoAiEnabled && sessionToken) {
+      connectAutoDemo();
+      setAutoDemoLog("Connecting to qwen backend…");
+      return () => disconnectAutoDemo();
+    }
+    return;
+  }, [autoDemoAiEnabled, connectAutoDemo, disconnectAutoDemo, sessionToken]);
+
+  useEffect(() => {
+    if (!autoDemoAiEnabled) return;
+    if (autoDemoStatusMessage) {
+      setAutoDemoLog(autoDemoStatusMessage);
+    }
+  }, [autoDemoAiEnabled, autoDemoStatusMessage]);
+
+  useEffect(() => {
+    if (!autoDemoAiEnabled || autoDemoKickoffSent) return;
+    if (isAutoDemoConnected) {
+      sendAutoDemoMessage(
+        `You are the auto-demo coding agent. Workspace: ${autoDemoWorkspace.path}. Repo: ${autoDemoWorkspace.repo}. Create a safe Python script named auto_demo_calc.py that prints the product of 123*456, run it, and report the output. Use built-in tools/shell to write and execute; avoid destructive actions.`
+      );
+      setAutoDemoKickoffSent(true);
+      setAutoDemoLog("Sent kickoff to qwen: generate+run calc script.");
+    }
+  }, [autoDemoAiEnabled, autoDemoKickoffSent, isAutoDemoConnected, sendAutoDemoMessage]);
 
   const rememberTabForChat = useCallback((tab: MainTab, chatId?: string | null) => {
     if (!chatId) return;
@@ -3862,6 +3910,47 @@ export default function Page() {
                   ))}
                 </div>
               ))}
+            </div>
+            <div className="demo-ai-row">
+              <div style={{ flex: 1 }}>
+                <div className="panel-title" style={{ marginBottom: 6 }}>
+                  Live AI demo (qwen)
+                </div>
+                <div className="panel-text">
+                  Kick off a real qwen backend session that writes a Python script in the demo repo
+                  and runs it to compute 123×456.
+                </div>
+                <div className="demo-ai-controls">
+                  <button
+                    className="tab"
+                    onClick={() => {
+                      setAutoDemoAiEnabled(true);
+                      setAutoDemoKickoffSent(false);
+                      setAutoDemoLog("Starting AI demo…");
+                    }}
+                    disabled={!sessionToken}
+                  >
+                    Run AI demo (qwen)
+                  </button>
+                  <span className="item-subtle">{autoDemoLog}</span>
+                </div>
+              </div>
+              <div className="demo-ai-stream">
+                <div className="demo-ai-stream-title">AI output</div>
+                {autoDemoMessages.slice(-4).map((msg) => (
+                  <div key={msg.id} className={`demo-ai-line demo-ai-${msg.role}`}>
+                    <span className="demo-ai-role">{msg.role}:</span> {msg.content}
+                  </div>
+                ))}
+                {autoDemoStreaming && (
+                  <div className="demo-ai-line demo-ai-assistant">
+                    <span className="demo-ai-role">assistant:</span> {autoDemoStreaming}
+                  </div>
+                )}
+                {!autoDemoMessages.length && !autoDemoStreaming && (
+                  <div className="item-subtle">No output yet.</div>
+                )}
+              </div>
             </div>
           </div>
           <div className="columns">

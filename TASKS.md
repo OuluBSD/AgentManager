@@ -318,6 +318,7 @@ AI Integration Implementation:
 - Adjusted challenge mode bootstrap to send a silent system-style instruction and suppress the initial AI echo so users no longer see the setup blurb when connecting.
 - Added assistant challenge toggle (default on) flowing from env config to AI chat connections, sending a system prompt that encourages respectful pushback on unclear or risky user statements.
 - Enforced JSON status compliance by normalizing allowed statuses (`idle`, `in_progress`, `waiting`, `blocked`, `done`, `error`) and rejecting invalid values early in the pipeline.
+- Moved the Automatic Demo workspace under `~/.config/agent-manager/auto-demo/qwen-backend`, seeded a live qwen-backed “Implement FS API” demo run button that actually connects to the AI backend, and shows live output as it writes/runs a small Python calc script in the local git repo.
 - Documented the audit `ipAddress` filter semantics in `API_CONTRACTS.md` so it is clear how to scope queries by IP.
 - Ensured the Code tab now surfaces save failures with toast messaging that mirrors the detail shown for successful writes.
 - Confirmed the terminal WebSocket idle timer test in `nexus-backend` stays open when `TERMINAL_IDLE_MS` is zero (`tsx --test src/__tests__/terminal.ws-client.test.ts`).
