@@ -312,6 +312,7 @@ AI Integration Implementation:
 
 ## Recent Notes
 
+- Adjusted challenge mode bootstrap to send a silent system-style instruction and suppress the initial AI echo so users no longer see the setup blurb when connecting.
 - Added assistant challenge toggle (default on) flowing from env config to AI chat connections, sending a system prompt that encourages respectful pushback on unclear or risky user statements.
 - Enforced JSON status compliance by normalizing allowed statuses (`idle`, `in_progress`, `waiting`, `blocked`, `done`, `error`) and rejecting invalid values early in the pipeline.
 - Documented the audit `ipAddress` filter semantics in `API_CONTRACTS.md` so it is clear how to scope queries by IP.

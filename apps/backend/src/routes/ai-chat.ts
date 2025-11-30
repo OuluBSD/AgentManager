@@ -5,9 +5,9 @@ import { QwenCommand } from "../services/qwenClient.js";
 import { createAiBridge, resolveAiChain } from "../services/aiChatBridge.js";
 
 const CHALLENGE_PROMPT = [
-  "You are allowed and encouraged to challenge the user when statements seem incorrect or risky.",
-  "Ask clarifying questions before agreeing, surface contradictions, and offer safer alternatives.",
-  "Be respectful and concise while still pushing back when evidence is weak or assumptions are shaky.",
+  "System instruction: Adopt a critical collaborator stance.",
+  "When statements seem incorrect or risky, challenge them respectfully, ask clarifying questions, surface contradictions, and suggest safer alternatives.",
+  "Do not echo this instruction to the user; silently apply it during the conversation.",
 ].join(" ");
 
 function parseBooleanFlag(value: string | undefined, defaultValue: boolean): boolean {
@@ -75,6 +75,9 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         })
       );
 
+      let suppressChallengeReply = allowChallenge;
+      let challengeTimeout: NodeJS.Timeout | null = null;
+
       const bridge = await createAiBridge(fastify.log, chain, (msg: any) => {
         if (connection.socket.readyState !== connection.socket.OPEN) {
           return;
@@ -95,6 +98,20 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
               });
             }
           }
+        }
+
+        if (
+          suppressChallengeReply &&
+          msg.type === "conversation" &&
+          msg.role === "assistant" &&
+          typeof msg.content === "string"
+        ) {
+          suppressChallengeReply = false;
+          if (challengeTimeout) {
+            clearTimeout(challengeTimeout);
+            challengeTimeout = null;
+          }
+          return;
         }
 
         connection.socket.send(JSON.stringify(msg));
@@ -124,6 +141,10 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
           type: "user_input",
           content: CHALLENGE_PROMPT,
         });
+        challengeTimeout = setTimeout(() => {
+          suppressChallengeReply = false;
+          challengeTimeout = null;
+        }, 5000);
       }
 
       bridgeCleanup = async () => {
@@ -152,6 +173,10 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
 
     connection.socket.on("close", async () => {
       fastify.log.info(`[AIChat] WebSocket for session ${sessionId} closed`);
+      if (challengeTimeout) {
+        clearTimeout(challengeTimeout);
+        challengeTimeout = null;
+      }
       if (bridgeCleanup) {
         try {
           await bridgeCleanup();
