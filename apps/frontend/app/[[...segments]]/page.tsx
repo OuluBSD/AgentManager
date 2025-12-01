@@ -63,8 +63,8 @@ type Status =
   | "idle"
   | "error";
 type MainTab = "Chat" | "Terminal" | "Code";
-const DEMO_USERNAME = process.env.NEXT_PUBLIC_DEMO_USERNAME ?? "demo";
-const DEMO_PASSWORD = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "demo";
+const DEMO_USERNAME = process.env.NEXT_PUBLIC_DEMO_USERNAME ?? "user";
+const DEMO_PASSWORD = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "123";
 const DEMO_KEYFILE = process.env.NEXT_PUBLIC_DEMO_KEYFILE_TOKEN;
 const PROJECT_STORAGE_KEY = "agentmgr:selectedProject";
 const ROADMAP_STORAGE_KEY = "agentmgr:selectedRoadmap";

@@ -118,23 +118,23 @@ const CONFIG_DEFAULTS: ConfigDefault[] = [
     section: "AI Integration (Qwen AI)",
   },
 
-  // Demo credentials (development only)
+  // Developer auto-login (development only)
   {
     key: "NEXT_PUBLIC_DEMO_USERNAME",
-    value: "demo",
-    comment: "Demo username for frontend auto-login (development only)",
-    section: "Demo credentials (development only)",
+    value: "user",
+    comment: "Dev auto-login username for frontend (development only)",
+    section: "Developer auto-login (development only)",
   },
   {
     key: "NEXT_PUBLIC_DEMO_PASSWORD",
-    value: "demo",
-    comment: "Demo password for frontend auto-login (development only)",
-    section: "Demo credentials (development only)",
+    value: "123",
+    comment: "Dev auto-login password for frontend (development only)",
+    section: "Developer auto-login (development only)",
   },
   {
     key: "NEXT_PUBLIC_DEMO_KEYFILE_TOKEN",
     value: "",
-    section: "Demo credentials (development only)",
+    section: "Developer auto-login (development only)",
   },
 ];
 
