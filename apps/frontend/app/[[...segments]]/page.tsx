@@ -868,9 +868,33 @@ export default function Page() {
           lastAssistant.content &&
           lastAssistant.content.trim() === trimmedContent
         ) {
+          setMessages((prev) =>
+            dedupeMessages([
+              ...prev,
+              {
+                id: `assistant-${Date.now()}`,
+                chatId: selectedChatId,
+                role: "assistant",
+                content: trimmedContent,
+                createdAt: new Date().toISOString(),
+              },
+            ])
+          );
           return;
         }
         lastAssistantPersistedRef.current = { chatId: selectedChatId, content: trimmedContent };
+        setMessages((prev) =>
+          dedupeMessages([
+            ...prev,
+            {
+              id: `assistant-${Date.now()}`,
+              chatId: selectedChatId,
+              role: "assistant",
+              content: trimmedContent,
+              createdAt: new Date().toISOString(),
+            },
+          ])
+        );
         postChatMessage(sessionToken, selectedChatId, {
           role: "assistant",
           content: trimmedContent,
