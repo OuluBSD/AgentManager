@@ -2286,12 +2286,15 @@ export default function Page() {
     setStatusMessage("Preparing demo projects and chats…");
     setError(null);
     try {
+      const existingProjects = await fetchProjects(sessionToken);
+      const projectCache = [...existingProjects];
       for (const seed of demoSeeds) {
-        const existingProject = projects.find((p) => p.name === seed.project.name);
+        const existingProject = projectCache.find((p) => p.name === seed.project.name);
         let projectId = existingProject?.id ?? null;
         if (!projectId) {
           const { id } = await createProject(sessionToken, seed.project);
           projectId = id;
+          projectCache.push({ ...seed.project, id });
         }
         if (!projectId) continue;
 
@@ -2334,7 +2337,7 @@ export default function Page() {
     } finally {
       setSeeding(false);
     }
-  }, [activeUser, hydrateWorkspace, projects, sessionToken, username]);
+  }, [activeUser, hydrateWorkspace, sessionToken, username]);
 
   useEffect(() => {
     if (sessionToken && !autoSeededRef.current) {
