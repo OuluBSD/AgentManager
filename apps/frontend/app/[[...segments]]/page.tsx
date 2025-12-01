@@ -63,8 +63,10 @@ type Status =
   | "idle"
   | "error";
 type MainTab = "Chat" | "Terminal" | "Code";
-const DEMO_USERNAME = process.env.NEXT_PUBLIC_DEMO_USERNAME ?? "user";
-const DEMO_PASSWORD = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "123";
+const envAutoUser = process.env.NEXT_PUBLIC_DEMO_USERNAME ?? "";
+const envAutoPass = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "";
+const DEMO_USERNAME = envAutoUser && envAutoUser !== "demo" ? envAutoUser : "user";
+const DEMO_PASSWORD = envAutoPass && envAutoPass !== "demo" ? envAutoPass : "123";
 const DEMO_KEYFILE = process.env.NEXT_PUBLIC_DEMO_KEYFILE_TOKEN;
 const PROJECT_STORAGE_KEY = "agentmgr:selectedProject";
 const ROADMAP_STORAGE_KEY = "agentmgr:selectedRoadmap";
@@ -1679,9 +1681,13 @@ export default function Page() {
     if (typeof window === "undefined") return;
     const storedToken = localStorage.getItem("sessionToken");
     const storedUsername = localStorage.getItem("username");
-    if (storedToken && storedUsername) {
+    if (storedToken && storedUsername && storedUsername !== "demo") {
       handleLoginSuccess(storedToken, storedUsername);
       return;
+    }
+    if (storedUsername === "demo") {
+      localStorage.removeItem("sessionToken");
+      localStorage.removeItem("username");
     }
     // Auto-login with demo credentials if available (for testing/development)
     if (DEMO_USERNAME && DEMO_PASSWORD) {
