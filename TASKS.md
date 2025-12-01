@@ -318,6 +318,7 @@ AI Integration Implementation:
 - Seeded a new Nexus → MVP Core chat titled “AI Demo” that carries the auto-demo metadata and starter messages so the inline qwen run button appears there as well.
 - Auto-seed runs on login so demo projects/chats appear without pressing “Seed demo,” and the auto-demo controls now render as a synthetic chat message instead of a separate panel.
 - Seeding now reuses existing demo projects by name (fetches from the server first) so repeated “Seed demo” runs no longer duplicate the demo project.
+- Added a guard to skip seeding when demo projects already exist, preventing further duplication on auto-seed or manual seed clicks.
 - Styled the Agent Manager auto demo CLI preview so diff blocks render with line-level colors (add/delete/hunk/meta) for easier visual scanning.
 - Seeded a git-backed Qwen backend demo project and starter chat metadata so the inline auto-demo flow has workspace/repo hints baked in.
 - Adjusted challenge mode bootstrap to send a silent system-style instruction and suppress the initial AI echo so users no longer see the setup blurb when connecting.

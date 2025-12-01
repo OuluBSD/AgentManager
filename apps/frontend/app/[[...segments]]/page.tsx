@@ -2288,6 +2288,14 @@ export default function Page() {
     try {
       const existingProjects = await fetchProjects(sessionToken);
       const projectCache = [...existingProjects];
+      const alreadySeeded = demoSeeds.every((seed) =>
+        projectCache.some((p) => p.name === seed.project.name)
+      );
+      if (alreadySeeded) {
+        setStatusMessage("Demo data already present.");
+        setSeeding(false);
+        return;
+      }
       for (const seed of demoSeeds) {
         const existingProject = projectCache.find((p) => p.name === seed.project.name);
         let projectId = existingProject?.id ?? null;
