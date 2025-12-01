@@ -205,6 +205,26 @@ const contextActionConfig: Record<ContextTarget, { key: string; label: string }[
     { key: "merge", label: "Merge chat" },
   ],
 };
+
+function dedupeMessages(items: MessageItem[]): MessageItem[] {
+  const result: MessageItem[] = [];
+  for (const item of items) {
+    const last = result[result.length - 1];
+    const currentContent = (item.content || "").trim();
+    const lastContent = (last?.content || "").trim();
+    if (
+      last &&
+      last.role === item.role &&
+      last.chatId === item.chatId &&
+      lastContent === currentContent
+    ) {
+      continue;
+    }
+    result.push(item);
+  }
+  return result;
+}
+
 const SETTINGS_SECTIONS: { key: SettingsCategory; label: string; detail: string }[] = [
   { key: "appearance", label: "Appearance", detail: "Theme & palette" },
   { key: "workspace", label: "Workspace", detail: "Defaults & layout" },
@@ -785,6 +805,10 @@ export default function Page() {
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false);
   const [aiStreamingPreview, setAiStreamingPreview] = useState("");
+  const lastAssistantPersistedRef = useRef<{ chatId: string | null; content: string | null }>({
+    chatId: null,
+    content: null,
+  });
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const [chatStatusDraft, setChatStatusDraft] = useState<Status>("in_progress");
   const [chatProgressDraft, setChatProgressDraft] = useState<string>("0");
@@ -828,15 +852,29 @@ export default function Page() {
     token: sessionToken ?? "",
     allowChallenge: false,
     onAssistantMessage: ({ content, final }) => {
+      const trimmedContent = (content || "").trim();
       setAiStreamingPreview(final ? "" : content);
       if (
         final &&
-        content &&
+        trimmedContent &&
         selectedChatId &&
         !selectedChatId.startsWith("meta-") &&
         sessionToken
       ) {
-        postChatMessage(sessionToken, selectedChatId, { role: "assistant", content })
+        const lastAssistant = lastAssistantPersistedRef.current;
+        if (
+          lastAssistant &&
+          lastAssistant.chatId === selectedChatId &&
+          lastAssistant.content &&
+          lastAssistant.content.trim() === trimmedContent
+        ) {
+          return;
+        }
+        lastAssistantPersistedRef.current = { chatId: selectedChatId, content: trimmedContent };
+        postChatMessage(sessionToken, selectedChatId, {
+          role: "assistant",
+          content: trimmedContent,
+        })
           .then(() => loadMessagesForChat(selectedChatId, sessionToken))
           .catch((err) =>
             setMessagesError(
@@ -886,6 +924,15 @@ export default function Page() {
   useEffect(() => {
     applyThemePalette(activePalette);
   }, [activePalette]);
+  useEffect(() => {
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (lastAssistant) {
+      lastAssistantPersistedRef.current = {
+        chatId: lastAssistant.chatId,
+        content: lastAssistant.content,
+      };
+    }
+  }, [messages]);
 
   const selectedChat = chats.find((c) => c.id === selectedChatId);
   const isMetaChatSelected = selectedChat?.meta;
@@ -1370,7 +1417,8 @@ export default function Page() {
           const metaChat = Object.values(metaChats).find((mc) => mc.roadmapListId === metaChatId);
           if (metaChat) {
             const items = await fetchMetaChatMessages(token, metaChat.id);
-            setMessages(items.map((m) => ({ ...m, chatId: m.metaChatId })) as MessageItem[]);
+            const mapped = items.map((m) => ({ ...m, chatId: m.metaChatId })) as MessageItem[];
+            setMessages(dedupeMessages(mapped));
           } else {
             setMessages([]);
             setMessagesError("Meta-chat not found");
@@ -1378,7 +1426,7 @@ export default function Page() {
         } else {
           // Load regular chat messages
           const items = await fetchChatMessages(token, chatId);
-          setMessages(items as MessageItem[]);
+          setMessages(dedupeMessages(items as MessageItem[]));
         }
       } catch (err) {
         setMessagesError(err instanceof Error ? err.message : "Failed to load messages");
@@ -2785,6 +2833,7 @@ export default function Page() {
         setMessageDraft("");
         await loadMessagesForChat(selectedChatId, sessionToken);
         if (!isMetaChatSelected) {
+          lastAssistantPersistedRef.current = { chatId: selectedChatId, content: null };
           if (!isChatAiConnected) {
             connectChatAi();
           }
