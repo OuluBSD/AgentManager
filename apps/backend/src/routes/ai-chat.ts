@@ -21,10 +21,11 @@ function parseBooleanFlag(value: string | undefined, defaultValue: boolean): boo
 export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/ai-chat/:sessionId", { websocket: true }, async (connection, request) => {
     const { sessionId } = request.params as { sessionId: string };
-    const { backend, token, challenge } = request.query as {
+    const { backend, token, challenge, workspace } = request.query as {
       backend: AIBackendType;
       token: string;
       challenge?: string;
+      workspace?: string;
     };
 
     const session = await validateToken(request.server, token);
@@ -77,44 +78,51 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         })
       );
 
-      const bridge = await createAiBridge(fastify.log, chain, (msg: any) => {
-        if (connection.socket.readyState !== connection.socket.OPEN) {
-          return;
-        }
+      const bridge = await createAiBridge(
+        fastify.log,
+        chain,
+        (msg: any) => {
+          if (connection.socket.readyState !== connection.socket.OPEN) {
+            return;
+          }
 
-        // Auto-approve tool groups
-        if (msg.type === "tool_group") {
-          if (!approvedToolGroups.has(msg.id)) {
-            approvedToolGroups.add(msg.id);
-            fastify.log.info(
-              `[AIChat] Auto-approving tool group ${msg.id} with ${msg.tools.length} tools`
-            );
-            for (const tool of msg.tools) {
-              bridge.send({
-                type: "tool_approval",
-                approved: true,
-                tool_id: tool.tool_id,
-              });
+          // Auto-approve tool groups
+          if (msg.type === "tool_group") {
+            if (!approvedToolGroups.has(msg.id)) {
+              approvedToolGroups.add(msg.id);
+              fastify.log.info(
+                `[AIChat] Auto-approving tool group ${msg.id} with ${msg.tools.length} tools`
+              );
+              for (const tool of msg.tools) {
+                bridge.send({
+                  type: "tool_approval",
+                  approved: true,
+                  tool_id: tool.tool_id,
+                });
+              }
             }
           }
-        }
 
-        if (
-          suppressChallengeReply &&
-          msg.type === "conversation" &&
-          msg.role === "assistant" &&
-          typeof msg.content === "string"
-        ) {
-          suppressChallengeReply = false;
-          if (challengeTimeout) {
-            clearTimeout(challengeTimeout);
-            challengeTimeout = null;
+          if (
+            suppressChallengeReply &&
+            msg.type === "conversation" &&
+            msg.role === "assistant" &&
+            typeof msg.content === "string"
+          ) {
+            suppressChallengeReply = false;
+            if (challengeTimeout) {
+              clearTimeout(challengeTimeout);
+              challengeTimeout = null;
+            }
+            return;
           }
-          return;
-        }
 
-        connection.socket.send(JSON.stringify(msg));
-      });
+          connection.socket.send(JSON.stringify(msg));
+        },
+        {
+          workspaceRoot: workspace,
+        }
+      );
 
       connection.socket.send(
         JSON.stringify({

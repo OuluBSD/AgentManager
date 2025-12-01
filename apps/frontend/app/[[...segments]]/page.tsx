@@ -851,6 +851,7 @@ export default function Page() {
     sessionId: selectedChatId ? `chat-${selectedChatId}` : "agent-manager",
     token: sessionToken ?? "",
     allowChallenge: false,
+    workspacePath: resolvedChatWorkspacePath || undefined,
     onAssistantMessage: ({ content, final }) => {
       const trimmedContent = (content || "").trim();
       setAiStreamingPreview(final ? "" : content);
@@ -968,6 +969,12 @@ export default function Page() {
   const managerHint = resolveChatManager(selectedChat);
   const serverHint = resolveChatServer(selectedChat);
   const aiChatHint = resolveChatAiChat(selectedChat);
+  const resolvedChatWorkspacePath = useMemo(() => {
+    if (!selectedChat || selectedChat.meta) return null;
+    if (folderHint) return folderHint;
+    if (selectedProject?.contentPath) return selectedProject.contentPath;
+    return null;
+  }, [folderHint, selectedChat, selectedProject?.contentPath]);
   const isAutoDemoChat =
     !!selectedChat &&
     (readWorkspacePath(selectedChat.metadata) === autoDemoWorkspace.path ||

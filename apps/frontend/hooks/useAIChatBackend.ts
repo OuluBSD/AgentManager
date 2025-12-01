@@ -22,6 +22,7 @@ interface UseAIChatBackendOptions {
   disableTools?: boolean;
   disableFilesystem?: boolean;
   allowChallenge?: boolean;
+  workspacePath?: string | null;
   onAssistantMessage?: (payload: { content: string; final: boolean }) => void;
   onStatusChange?: (payload: { status: ChatStatus; message?: string }) => void;
 }
@@ -78,11 +79,15 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     const uniqueSessionId = `${options.sessionId}-${connectionId.current}`;
     const challengeParam =
       options.allowChallenge === false ? "false" : options.allowChallenge === true ? "true" : "";
+    const workspaceParam =
+      options.workspacePath && options.workspacePath.trim()
+        ? `&workspace=${encodeURIComponent(options.workspacePath.trim())}`
+        : "";
     const wsUrl = `${protocol}//${backendHost}/api/ai-chat/${uniqueSessionId}?backend=${
       options.backend
     }&token=${options.token}${
       challengeParam ? `&challenge=${encodeURIComponent(challengeParam)}` : ""
-    }`;
+    }${workspaceParam}`;
 
     if (options.disableTools) {
       // Add query param (will be implemented in backend)
@@ -139,6 +144,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     options.token,
     options.disableTools,
     options.allowChallenge,
+    options.workspacePath,
   ]);
 
   // Disconnect from backend

@@ -193,8 +193,12 @@ class DirectQwenBridge implements AiBridge {
 }
 
 function resolveWorkspaceRoot(candidate?: string): string {
-  if (candidate && fs.existsSync(candidate)) {
-    return candidate;
+  if (candidate) {
+    const trimmed = candidate.trim();
+    if (!fs.existsSync(trimmed)) {
+      fs.mkdirSync(trimmed, { recursive: true });
+    }
+    return trimmed;
   }
 
   const fallback = process.env.LOCAL_WORKER_REPO || path.join(process.cwd(), "projects", "ai-chat");
@@ -210,9 +214,14 @@ function resolveWorkspaceRoot(candidate?: string): string {
 export async function createAiBridge(
   log: FastifyBaseLogger,
   chain: AiChainSelection,
-  onMessage: (msg: any) => void
+  onMessage: (msg: any) => void,
+  config?: { workspaceRoot?: string; model?: string; mode?: "stdio" | "tcp"; forceDirect?: boolean }
 ): Promise<AiBridge> {
-  const preferProxy = chain.manager !== undefined && process.env.FORCE_DIRECT_AI !== "true";
+  const preferProxy =
+    !config?.workspaceRoot &&
+    chain.manager !== undefined &&
+    process.env.FORCE_DIRECT_AI !== "true" &&
+    config?.forceDirect !== true;
 
   if (preferProxy && chain.manager) {
     const url = new URL(
@@ -232,9 +241,9 @@ export async function createAiBridge(
   }
 
   const bridge = new DirectQwenBridge(chain, log, onMessage, {
-    workspaceRoot: chain.worker?.metadata?.workspace,
-    model: chain.ai.metadata?.model,
-    mode: chain.ai.metadata?.mode,
+    workspaceRoot: config?.workspaceRoot || chain.worker?.metadata?.workspace,
+    model: config?.model ?? chain.ai.metadata?.model,
+    mode: config?.mode ?? chain.ai.metadata?.mode,
   });
   await bridge.start();
   return bridge;
