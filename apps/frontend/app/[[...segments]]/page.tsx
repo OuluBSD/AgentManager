@@ -784,6 +784,7 @@ export default function Page() {
   >([]);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false);
+  const [aiStreamingPreview, setAiStreamingPreview] = useState("");
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const [chatStatusDraft, setChatStatusDraft] = useState<Status>("in_progress");
   const [chatProgressDraft, setChatProgressDraft] = useState<string>("0");
@@ -815,6 +816,40 @@ export default function Page() {
     sessionId: "auto-demo-fs",
     token: sessionToken ?? "",
     allowChallenge: true,
+  });
+  const {
+    connect: connectChatAi,
+    disconnect: disconnectChatAi,
+    sendMessage: sendChatAiMessage,
+    isConnected: isChatAiConnected,
+  } = useAIChatBackend({
+    backend: "qwen",
+    sessionId: selectedChatId ? `chat-${selectedChatId}` : "agent-manager",
+    token: sessionToken ?? "",
+    allowChallenge: false,
+    onAssistantMessage: ({ content, final }) => {
+      setAiStreamingPreview(final ? "" : content);
+      if (
+        final &&
+        content &&
+        selectedChatId &&
+        !selectedChatId.startsWith("meta-") &&
+        sessionToken
+      ) {
+        postChatMessage(sessionToken, selectedChatId, { role: "assistant", content })
+          .then(() => loadMessagesForChat(selectedChatId, sessionToken))
+          .catch((err) =>
+            setMessagesError(
+              err instanceof Error ? err.message : "Failed to append assistant message"
+            )
+          );
+      }
+    },
+    onStatusChange: ({ status, message }) => {
+      if (status === "error" && message) {
+        setMessagesError(message);
+      }
+    },
   });
   const [autoDemoAiEnabled, setAutoDemoAiEnabled] = useState(false);
   const [autoDemoKickoffSent, setAutoDemoKickoffSent] = useState(false);
@@ -867,6 +902,18 @@ export default function Page() {
     (readWorkspacePath(selectedChat.metadata) === autoDemoWorkspace.path ||
       folderHint === autoDemoWorkspace.path ||
       repoHint === autoDemoWorkspace.repo);
+
+  useEffect(() => {
+    if (!sessionToken || !selectedChatId || selectedChatId.startsWith("meta-")) {
+      setAiStreamingPreview("");
+      disconnectChatAi();
+      return;
+    }
+    connectChatAi();
+    return () => {
+      disconnectChatAi();
+    };
+  }, [connectChatAi, disconnectChatAi, selectedChatId, sessionToken]);
 
   useEffect(() => {
     if (autoDemoAiEnabled && sessionToken) {
@@ -2737,6 +2784,12 @@ export default function Page() {
         await postChatMessage(sessionToken, selectedChatId, { role: "user", content });
         setMessageDraft("");
         await loadMessagesForChat(selectedChatId, sessionToken);
+        if (!isMetaChatSelected) {
+          if (!isChatAiConnected) {
+            connectChatAi();
+          }
+          sendChatAiMessage(content);
+        }
       }
     } catch (err) {
       setMessagesError(err instanceof Error ? err.message : "Failed to send message");
@@ -2751,6 +2804,10 @@ export default function Page() {
     selectedProjectId,
     selectedRoadmapId,
     metaChats,
+    isChatAiConnected,
+    connectChatAi,
+    sendChatAiMessage,
+    isMetaChatSelected,
   ]);
 
   // Update slash command suggestions when message draft changes
@@ -3827,6 +3884,20 @@ export default function Page() {
                   </span>
                 </div>
               ))}
+              {aiStreamingPreview &&
+                !isMetaChatSelected &&
+                (messageFilter === "all" || messageFilter === "assistant") && (
+                  <div className="chat-row" key="assistant-streaming">
+                    <span className="chat-role chat-role-assistant">assistant</span>
+                    <div className="bubble" style={{ opacity: 0.85 }}>
+                      {aiStreamingPreview}
+                      <span className="item-subtle" style={{ marginLeft: 8 }}>
+                        streaming…
+                      </span>
+                    </div>
+                    <span className="item-subtle">just now</span>
+                  </div>
+                )}
             </div>
             {messageNav.userMessages.length > 0 && (
               <div
@@ -4904,8 +4975,9 @@ export default function Page() {
                 <div className="confirm-title">Remove project?</div>
                 <div className="confirm-body">
                   <div className="confirm-warning">
-                    Warning: Are you sure you want to remove "{projectRemovalPrompt.project.name}"?
-                    This will also remove its roadmaps, chats, and local workspace state.
+                    Warning: Are you sure you want to remove &quot;
+                    {projectRemovalPrompt.project.name}
+                    &quot;? This will also remove its roadmaps, chats, and local workspace state.
                   </div>
                   {projectRemovalPrompt.error && (
                     <div className="confirm-error">{projectRemovalPrompt.error}</div>

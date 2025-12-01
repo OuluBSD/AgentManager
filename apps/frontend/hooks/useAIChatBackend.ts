@@ -22,6 +22,8 @@ interface UseAIChatBackendOptions {
   disableTools?: boolean;
   disableFilesystem?: boolean;
   allowChallenge?: boolean;
+  onAssistantMessage?: (payload: { content: string; final: boolean }) => void;
+  onStatusChange?: (payload: { status: ChatStatus; message?: string }) => void;
 }
 
 export function useAIChatBackend(options: UseAIChatBackendOptions) {
@@ -30,9 +32,16 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
   const [statusMessage, setStatusMessage] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [isConnected, setIsConnected] = useState(false);
   const nextMessageId = useRef(1);
   const wsRef = useRef<WebSocket | null>(null);
   const connectionId = useRef(Math.random().toString(36));
+  const streamingContentRef = useRef("");
+  const optionsRef = useRef(options);
+
+  useEffect(() => {
+    optionsRef.current = options;
+  }, [options]);
 
   // Log connection ID once on mount for debugging
   useEffect(() => {
@@ -50,6 +59,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       "wsRef.current:",
       wsRef.current
     );
+    setIsConnected(false);
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
       console.log("[useAIChatBackend] Already connected or connecting, returning");
       return;
@@ -85,6 +95,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       console.log("[useAIChatBackend] WebSocket opened");
       setStatus("idle");
       setStatusMessage("Connected");
+      setIsConnected(true);
       wsRef.current = ws;
     };
 
@@ -109,11 +120,17 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       console.error("WebSocket error:", error);
       setStatus("error");
       setStatusMessage("Connection error");
+      setIsConnected(false);
+      optionsRef.current.onStatusChange?.({ status: "error", message: "Connection error" });
     };
 
     ws.onclose = () => {
       setStatus("idle");
       setStatusMessage("Disconnected");
+      setIsConnected(false);
+      setIsStreaming(false);
+      setStreamingContent("");
+      streamingContentRef.current = "";
       wsRef.current = null;
     };
   }, [
@@ -142,9 +159,11 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     // Clear messages and state when disconnecting
     setMessages([]);
     setStreamingContent("");
+    streamingContentRef.current = "";
     setIsStreaming(false);
     setStatus("idle");
     setStatusMessage("");
+    setIsConnected(false);
   }, []);
 
   // Send message to backend
@@ -165,6 +184,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     setStatus("responding");
     setIsStreaming(true);
     setStreamingContent("");
+    streamingContentRef.current = "";
 
     wsRef.current.send(
       JSON.stringify({
@@ -200,6 +220,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
 
     setIsStreaming(false);
     setStreamingContent("");
+    streamingContentRef.current = "";
     setStatus("idle");
     setStatusMessage("Interrupted");
   }, [isStreaming, streamingContent]);
@@ -229,6 +250,8 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
                 `[useAIChatBackend:${connectionId.current}] Accumulated length:`,
                 newContent.length
               );
+              streamingContentRef.current = newContent;
+              optionsRef.current.onAssistantMessage?.({ content: newContent, final: false });
               return newContent;
             });
             setIsStreaming(true);
@@ -243,11 +266,12 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
                 `[useAIChatBackend:${connectionId.current}] Final accumulated length:`,
                 prev.length
               );
-              if (prev) {
+              const finalContent = prev || msg.content || "";
+              if (finalContent) {
                 const assistantMessage: ChatMessage = {
                   id: nextMessageId.current++,
                   role: "assistant",
-                  content: prev,
+                  content: finalContent,
                   timestamp: Date.now(),
                 };
                 console.log(
@@ -270,6 +294,8 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
                   return [...msgs, assistantMessage];
                 });
               }
+              streamingContentRef.current = "";
+              optionsRef.current.onAssistantMessage?.({ content: finalContent, final: true });
               return ""; // Clear streaming content
             });
             setIsStreaming(false);
@@ -287,7 +313,9 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
             responding: "responding",
             waiting_for_confirmation: "responding",
           };
-          setStatus(stateMap[msg.state] || "idle");
+          const nextStatus = stateMap[msg.state] || "idle";
+          setStatus(nextStatus);
+          optionsRef.current.onStatusChange?.({ status: nextStatus, message: msg.message });
         }
         if (msg.message) {
           setStatusMessage(msg.message);
@@ -338,6 +366,6 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     disconnect,
     sendMessage,
     interrupt,
-    isConnected: wsRef.current?.readyState === WebSocket.OPEN,
+    isConnected,
   };
 }
