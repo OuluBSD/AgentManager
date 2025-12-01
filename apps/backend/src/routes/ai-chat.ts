@@ -54,6 +54,8 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
       challenge,
       parseBooleanFlag(process.env.ASSISTANT_CHALLENGE_ENABLED, true)
     );
+    let suppressChallengeReply = allowChallenge;
+    let challengeTimeout: NodeJS.Timeout | null = null;
 
     try {
       const chain = await resolveAiChain(fastify);
@@ -74,9 +76,6 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
           },
         })
       );
-
-      let suppressChallengeReply = allowChallenge;
-      let challengeTimeout: NodeJS.Timeout | null = null;
 
       const bridge = await createAiBridge(fastify.log, chain, (msg: any) => {
         if (connection.socket.readyState !== connection.socket.OPEN) {
