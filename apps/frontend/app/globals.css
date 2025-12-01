@@ -1447,6 +1447,10 @@ body {
   overflow: hidden;
 }
 
+.project-form-window {
+  width: min(720px, calc(100% - 48px));
+}
+
 .settings-header {
   display: flex;
   align-items: center;
@@ -1519,6 +1523,39 @@ body {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 6px;
+}
+
+.project-form-body {
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.project-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.project-form-field {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.project-form-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.project-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 button.danger {

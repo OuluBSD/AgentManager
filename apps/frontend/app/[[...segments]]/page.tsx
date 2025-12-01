@@ -28,9 +28,7 @@ import {
   updateChatStatus,
   fetchTemplates,
   fetchMetaChat,
-  fetchProjectDetails,
   ProjectPayload,
-  ProjectDetailsResponse,
   updateProject,
   deleteProject,
   updateRoadmap,
@@ -163,14 +161,6 @@ type ContextMenuState =
 
 type ContextPanel =
   | {
-      kind: "project-settings";
-      projectId: string;
-      projectName: string;
-      loading: boolean;
-      error?: string;
-      details?: ProjectDetailsResponse;
-    }
-  | {
       kind: "project-templates";
       projectId: string;
       projectName: string;
@@ -196,7 +186,6 @@ type SettingsCategory = "appearance" | "workspace";
 const contextActionConfig: Record<ContextTarget, { key: string; label: string }[]> = {
   project: [
     { key: "edit", label: "Edit project" },
-    { key: "settings", label: "Project settings" },
     { key: "templates", label: "Favorite templates" },
     { key: "remove", label: "Remove project" },
   ],
@@ -832,6 +821,10 @@ export default function Page() {
   const systemColorScheme = usePrefersColorScheme();
   const [accountMenu, setAccountMenu] = useState<{ x: number; y: number } | null>(null);
   const [overlay, setOverlay] = useState<{ kind: "settings" | "activity" } | null>(null);
+  const [projectFormOverlay, setProjectFormOverlay] = useState<{
+    mode: "create" | "edit";
+    project?: ProjectItem | null;
+  } | null>(null);
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("appearance");
   const resolvedGlobalThemeMode: "dark" | "light" =
     globalThemeMode === "auto" ? systemColorScheme : globalThemeMode;
@@ -1880,45 +1873,6 @@ export default function Page() {
     [ensureStatus, metaChats, roadmapStatus, sessionToken]
   );
 
-  const openProjectSettingsPanel = useCallback(
-    async (project: ProjectItem) => {
-      const basePanel = {
-        kind: "project-settings" as const,
-        projectId: project.id ?? project.name,
-        projectName: project.name,
-        loading: true,
-      };
-      setContextPanel(basePanel);
-      if (!project.id) {
-        setContextPanel({
-          ...basePanel,
-          loading: false,
-          error: "Project identifier unavailable.",
-        });
-        return;
-      }
-      if (!sessionToken) {
-        setContextPanel({
-          ...basePanel,
-          loading: false,
-          error: "Login required to view project settings.",
-        });
-        return;
-      }
-      try {
-        const details = await fetchProjectDetails(sessionToken, project.id);
-        setContextPanel({ ...basePanel, loading: false, details });
-      } catch (err) {
-        setContextPanel({
-          ...basePanel,
-          loading: false,
-          error: err instanceof Error ? err.message : "Unable to load project settings.",
-        });
-      }
-    },
-    [sessionToken]
-  );
-
   const openProjectTemplatesPanel = useCallback((project: ProjectItem) => {
     setContextPanel({
       kind: "project-templates",
@@ -1935,7 +1889,20 @@ export default function Page() {
       description: project.info ?? "",
     });
     setProjectThemePreset("default");
+    setProjectFormOverlay({ mode: "edit", project });
+    setContextPanel(null);
+    setOverlay(null);
     setStatusMessage(`Editing project ${project.name}.`);
+  }, []);
+
+  const openCreateProjectForm = useCallback(() => {
+    setEditingProjectId(null);
+    setProjectDraft({ name: "", category: "", description: "" });
+    setProjectThemePreset("default");
+    setProjectFormOverlay({ mode: "create", project: null });
+    setContextPanel(null);
+    setOverlay(null);
+    setStatusMessage("Ready to add a project.");
   }, []);
 
   const startRoadmapEdit = useCallback((roadmap: RoadmapItem) => {
@@ -1973,10 +1940,6 @@ export default function Page() {
           case "edit":
             startProjectEdit(project);
             nextMessage = `Editing ${project.name}.`;
-            break;
-          case "settings":
-            await openProjectSettingsPanel(project);
-            nextMessage = `Showing settings for ${project.name}.`;
             break;
           case "templates":
             openProjectTemplatesPanel(project);
@@ -2180,7 +2143,6 @@ export default function Page() {
       handleSelectRoadmap,
       handleTabChange,
       loadMessagesForChat,
-      openProjectSettingsPanel,
       openProjectTemplatesPanel,
       selectedChatId,
       selectedProjectId,
@@ -2429,6 +2391,7 @@ export default function Page() {
       setSelectedProjectId(id);
       if (typeof window !== "undefined") localStorage.setItem(PROJECT_STORAGE_KEY, id);
       await loadRoadmapsForProject(id, sessionToken);
+      setProjectFormOverlay(null);
       setStatusMessage("Project created.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create project");
@@ -2442,7 +2405,13 @@ export default function Page() {
     setEditingProjectId(null);
     setProjectDraft({ name: "", category: "", description: "" });
     setProjectThemePreset("default");
+    setProjectFormOverlay(null);
   }, []);
+
+  const handleCloseProjectForm = useCallback(() => {
+    if (creatingProject || updatingProject) return;
+    cancelProjectEdit();
+  }, [cancelProjectEdit, creatingProject, updatingProject]);
 
   const handleUpdateProject = useCallback(async () => {
     if (!sessionToken) {
@@ -3906,18 +3875,13 @@ export default function Page() {
     }
   })();
 
-  const editingProjectName =
-    editingProjectId &&
-    (projects.find((project) => project.id === editingProjectId)?.name ?? editingProjectId);
   const editingRoadmapName =
     editingRoadmapId &&
     (roadmaps.find((roadmap) => roadmap.id === editingRoadmapId)?.title ?? editingRoadmapId);
   const contextPanelTitle = contextPanel
-    ? contextPanel.kind === "project-settings"
-      ? "Project settings"
-      : contextPanel.kind === "project-templates"
-        ? "Templates"
-        : "Roadmap context"
+    ? contextPanel.kind === "project-templates"
+      ? "Templates"
+      : "Roadmap context"
     : "";
   const contextPanelSubject =
     contextPanel?.kind === "roadmap-details"
@@ -3978,78 +3942,15 @@ export default function Page() {
                 >
                   Clear
                 </button>
-              </div>
-              <div className="login-row" style={{ gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                <input
-                  className="filter"
-                  placeholder="Project name"
-                  value={projectDraft.name}
-                  onChange={(e) => setProjectDraft((prev) => ({ ...prev, name: e.target.value }))}
-                  style={{ minWidth: 160 }}
-                />
-                <input
-                  className="filter"
-                  placeholder="Category"
-                  value={projectDraft.category}
-                  onChange={(e) =>
-                    setProjectDraft((prev) => ({ ...prev, category: e.target.value }))
-                  }
-                  style={{ minWidth: 120 }}
-                />
-                <input
-                  className="filter"
-                  placeholder="Description"
-                  value={projectDraft.description}
-                  onChange={(e) =>
-                    setProjectDraft((prev) => ({ ...prev, description: e.target.value }))
-                  }
-                  style={{ flex: 1, minWidth: 180 }}
-                />
-                <select
-                  className="filter"
-                  value={projectThemePreset}
-                  onChange={(event) =>
-                    setProjectThemePreset(event.target.value as ProjectThemePresetKey)
-                  }
-                  style={{ minWidth: 160 }}
-                >
-                  {(
-                    Object.entries(projectThemePresetLabels) as [ProjectThemePresetKey, string][]
-                  ).map(([key, label]) => (
-                    <option key={key} value={key}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
                 <button
                   className="tab"
-                  onClick={editingProjectId ? handleUpdateProject : handleCreateProject}
-                  disabled={
-                    editingProjectId
-                      ? updatingProject || !sessionToken
-                      : creatingProject || !sessionToken
-                  }
-                  title={sessionToken ? "" : "Login required"}
+                  onClick={openCreateProjectForm}
+                  disabled={!sessionToken}
+                  title={sessionToken ? "Add a project" : "Login required"}
                 >
-                  {editingProjectId
-                    ? updatingProject
-                      ? "Saving…"
-                      : "Save changes"
-                    : creatingProject
-                      ? "Creating…"
-                      : "+ Project"}
+                  Add
                 </button>
-                {editingProjectId && (
-                  <button className="ghost" onClick={cancelProjectEdit} disabled={updatingProject}>
-                    Cancel edit
-                  </button>
-                )}
               </div>
-              {editingProjectName && (
-                <div className="item-subtle editing-hint">
-                  Editing project: {editingProjectName}
-                </div>
-              )}
               {loading && <div className="item-subtle">Loading projects…</div>}
               {error && <div className="item-subtle">{error}</div>}
               <div className="list">
@@ -4596,6 +4497,141 @@ export default function Page() {
               </div>
             </div>
           )}
+          {projectFormOverlay && (
+            <div
+              className="settings-overlay"
+              role="dialog"
+              aria-modal="true"
+              onMouseDown={handleCloseProjectForm}
+            >
+              <div
+                className="settings-window project-form-window"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <div className="settings-header">
+                  <div>
+                    <div className="settings-title">
+                      {projectFormOverlay.mode === "edit" ? "Edit project" : "Add project"}
+                    </div>
+                    <div className="item-subtle">
+                      {projectFormOverlay.mode === "edit"
+                        ? (projectFormOverlay.project?.name ?? "Update project details.")
+                        : "Create a project to start organizing roadmaps and chats."}
+                    </div>
+                  </div>
+                  <button className="ghost" onClick={handleCloseProjectForm}>
+                    Close
+                  </button>
+                </div>
+                <div className="project-form-body">
+                  <div className="project-form-row">
+                    <div className="project-form-field">
+                      <label className="project-form-label" htmlFor="project-name">
+                        Name
+                      </label>
+                      <input
+                        id="project-name"
+                        className="filter"
+                        placeholder="Project name"
+                        value={projectDraft.name}
+                        onChange={(e) =>
+                          setProjectDraft((prev) => ({ ...prev, name: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="project-form-field">
+                      <label className="project-form-label" htmlFor="project-category">
+                        Category
+                      </label>
+                      <input
+                        id="project-category"
+                        className="filter"
+                        placeholder="Category"
+                        value={projectDraft.category}
+                        onChange={(e) =>
+                          setProjectDraft((prev) => ({ ...prev, category: e.target.value }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="project-form-row">
+                    <div className="project-form-field">
+                      <label className="project-form-label" htmlFor="project-description">
+                        Description
+                      </label>
+                      <input
+                        id="project-description"
+                        className="filter"
+                        placeholder="Description"
+                        value={projectDraft.description}
+                        onChange={(e) =>
+                          setProjectDraft((prev) => ({ ...prev, description: e.target.value }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="project-form-row">
+                    <div className="project-form-field">
+                      <label className="project-form-label" htmlFor="project-theme">
+                        Theme preset
+                      </label>
+                      <select
+                        id="project-theme"
+                        className="filter"
+                        value={projectThemePreset}
+                        onChange={(event) =>
+                          setProjectThemePreset(event.target.value as ProjectThemePresetKey)
+                        }
+                      >
+                        {(
+                          Object.entries(projectThemePresetLabels) as [
+                            ProjectThemePresetKey,
+                            string,
+                          ][]
+                        ).map(([key, label]) => (
+                          <option key={key} value={key}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="project-form-actions">
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={handleCloseProjectForm}
+                      disabled={creatingProject || updatingProject}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="tab"
+                      onClick={
+                        projectFormOverlay.mode === "edit"
+                          ? handleUpdateProject
+                          : handleCreateProject
+                      }
+                      disabled={
+                        (projectFormOverlay.mode === "edit" ? updatingProject : creatingProject) ||
+                        !sessionToken
+                      }
+                      title={sessionToken ? "" : "Login required"}
+                    >
+                      {projectFormOverlay.mode === "edit"
+                        ? updatingProject
+                          ? "Saving…"
+                          : "Save changes"
+                        : creatingProject
+                          ? "Creating…"
+                          : "Create project"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {projectRemovalPrompt && (
             <div
               className="confirm-overlay"
@@ -4654,53 +4690,7 @@ export default function Page() {
                 </button>
               </div>
               <div className="context-panel-content">
-                {contextPanel.kind === "project-settings" ? (
-                  <>
-                    {contextPanel.loading ? (
-                      <div className="item-subtle">Loading settings…</div>
-                    ) : contextPanel.error ? (
-                      <div className="item-subtle" style={{ color: "#EF4444" }}>
-                        {contextPanel.error}
-                      </div>
-                    ) : contextPanel.details ? (
-                      <div className="context-panel-section">
-                        <div className="context-panel-list-item">
-                          <span className="context-panel-label">Status</span>
-                          <span className="item-subtle">
-                            {formatStatusLabel(contextPanel.details.project.status as Status)}
-                          </span>
-                        </div>
-                        <div className="context-panel-list-item">
-                          <span className="context-panel-label">Description</span>
-                          <span className="item-subtle">
-                            {contextPanel.details.project.description ?? "No description"}
-                          </span>
-                        </div>
-                        <div className="context-panel-list-item">
-                          <span className="context-panel-label">Roadmaps</span>
-                          <span className="item-subtle">
-                            {contextPanel.details.roadmapLists.length} configured
-                          </span>
-                        </div>
-                        {contextPanel.details.roadmapLists.length > 0 && (
-                          <div className="context-panel-roadmaps">
-                            {contextPanel.details.roadmapLists.slice(0, 3).map((roadmap) => (
-                              <div className="context-panel-list-item" key={roadmap.id}>
-                                <span>{roadmap.title}</span>
-                                <span className="item-subtle">
-                                  {progressPercent(roadmap.progress)}% ·{" "}
-                                  {formatStatusLabel(roadmap.status as Status)}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="item-subtle">No project details available.</div>
-                    )}
-                  </>
-                ) : contextPanel.kind === "project-templates" ? (
+                {contextPanel.kind === "project-templates" ? (
                   <TemplatePanel
                     templates={templates}
                     token={sessionToken ?? ""}
