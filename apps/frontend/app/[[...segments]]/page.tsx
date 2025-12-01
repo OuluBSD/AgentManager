@@ -841,6 +841,22 @@ export default function Page() {
     token: sessionToken ?? "",
     allowChallenge: true,
   });
+  const selectedChat = chats.find((c) => c.id === selectedChatId);
+  const isMetaChatSelected = selectedChat?.meta;
+  const templateForChat = selectedChat?.templateId
+    ? templates.find((t) => t.id === selectedChat.templateId)
+    : null;
+  const folderHint = resolveChatFolder(selectedChat);
+  const repoHint = resolveChatRepo(selectedChat);
+  const managerHint = resolveChatManager(selectedChat);
+  const serverHint = resolveChatServer(selectedChat);
+  const aiChatHint = resolveChatAiChat(selectedChat);
+  const resolvedChatWorkspacePath = useMemo(() => {
+    if (!selectedChat || selectedChat.meta) return null;
+    if (folderHint) return folderHint;
+    if (selectedProject?.contentPath) return selectedProject.contentPath;
+    return null;
+  }, [folderHint, selectedChat, selectedProject?.contentPath]);
   const {
     connect: connectChatAi,
     disconnect: disconnectChatAi,
@@ -959,22 +975,6 @@ export default function Page() {
     }
   }, [messages]);
 
-  const selectedChat = chats.find((c) => c.id === selectedChatId);
-  const isMetaChatSelected = selectedChat?.meta;
-  const templateForChat = selectedChat?.templateId
-    ? templates.find((t) => t.id === selectedChat.templateId)
-    : null;
-  const folderHint = resolveChatFolder(selectedChat);
-  const repoHint = resolveChatRepo(selectedChat);
-  const managerHint = resolveChatManager(selectedChat);
-  const serverHint = resolveChatServer(selectedChat);
-  const aiChatHint = resolveChatAiChat(selectedChat);
-  const resolvedChatWorkspacePath = useMemo(() => {
-    if (!selectedChat || selectedChat.meta) return null;
-    if (folderHint) return folderHint;
-    if (selectedProject?.contentPath) return selectedProject.contentPath;
-    return null;
-  }, [folderHint, selectedChat, selectedProject?.contentPath]);
   const isAutoDemoChat =
     !!selectedChat &&
     (readWorkspacePath(selectedChat.metadata) === autoDemoWorkspace.path ||
