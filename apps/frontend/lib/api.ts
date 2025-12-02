@@ -1,10 +1,6 @@
-const apiBaseEnv = process.env.NEXT_PUBLIC_BACKEND_HTTP_BASE;
-const API_BASE =
-  apiBaseEnv && apiBaseEnv.trim().length
-    ? apiBaseEnv
-    : typeof window !== "undefined"
-      ? window.location.origin
-      : "http://localhost:3001";
+import { resolveBackendBase } from "./backendBase";
+
+const API_BASE = resolveBackendBase();
 
 export type ProjectPayload = {
   id: string;

@@ -114,7 +114,7 @@ const CONFIG_DEFAULTS: ConfigDefault[] = [
   {
     key: "QWEN_PATH",
     value: "",
-    comment: "Path to qwen-code CLI script (defaults to ./deps/qwen-code/script/qwen-code)",
+    comment: "Path to qwen-code CLI script (defaults to ./deps/qwen-code/scripts/qwen-code)",
     section: "AI Integration (Qwen AI)",
   },
 

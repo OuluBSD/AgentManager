@@ -30,7 +30,7 @@ const colors = {
 };
 
 // Get qwen-code path from environment or local submodule
-const defaultQwenPath = path.resolve(process.cwd(), 'deps/qwen-code/script/qwen-code');
+const defaultQwenPath = path.resolve(process.cwd(), 'deps/qwen-code/scripts/qwen-code');
 const qwenPath = process.env.QWEN_CODE_SCRIPT || process.env.QWEN_PATH || defaultQwenPath;
 const workspaceRoot = process.cwd();
 

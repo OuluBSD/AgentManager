@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AIBackendType } from "@nexus/shared/chat";
+import { resolveBackendBase, toWebSocketBase } from "../lib/backendBase";
 
 export interface ChatMessage {
   id: number;
@@ -71,10 +72,8 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     setStatusMessage(`Connecting to ${options.backend}...`);
 
     // WebSocket endpoint for AI chat
-    // Use NEXT_PUBLIC_BACKEND_HTTP_BASE to determine backend host
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_HTTP_BASE || "http://localhost:3001";
-    const backendHost = backendUrl.replace(/^https?:\/\//, "");
-    const protocol = backendUrl.startsWith("https") ? "wss:" : "ws:";
+    const backendUrl = resolveBackendBase();
+    const wsBase = toWebSocketBase(backendUrl);
     // Append connectionId to sessionId to ensure unique sessions even with React StrictMode double-mounting
     const uniqueSessionId = `${options.sessionId}-${connectionId.current}`;
     const challengeParam =
@@ -83,7 +82,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       options.workspacePath && options.workspacePath.trim()
         ? `&workspace=${encodeURIComponent(options.workspacePath.trim())}`
         : "";
-    const wsUrl = `${protocol}//${backendHost}/api/ai-chat/${uniqueSessionId}?backend=${
+    const wsUrl = `${wsBase}/api/ai-chat/${uniqueSessionId}?backend=${
       options.backend
     }&token=${options.token}${
       challengeParam ? `&challenge=${encodeURIComponent(challengeParam)}` : ""

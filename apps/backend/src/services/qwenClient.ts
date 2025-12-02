@@ -104,7 +104,7 @@ export type QwenCommand = QwenUserInput | QwenInterrupt | QwenToolApproval;
 export type QwenMode = "stdio" | "tcp";
 
 export interface QwenClientConfig {
-  qwenPath?: string; // Path to qwen-code CLI script (defaults to repo deps/qwen-code/script/qwen-code)
+  qwenPath?: string; // Path to qwen-code CLI script (defaults to repo deps/qwen-code/scripts/qwen-code)
   mode?: QwenMode; // Communication mode: stdio or tcp (default: stdio)
   tcpPort?: number; // TCP port (defaults to 7777, only used in TCP mode)
   tcpHost?: string; // TCP host (defaults to localhost)
