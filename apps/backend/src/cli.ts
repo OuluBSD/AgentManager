@@ -566,6 +566,292 @@ storageCmd
   });
 
 // ============================================================================
+// DEBUG COMMANDS
+// ============================================================================
+
+const debugCmd = program.command("debug").description("Debug and process monitoring commands");
+
+debugCmd
+  .command("processes")
+  .description("List all tracked processes")
+  .option("-t, --type <type>", "Filter by type (qwen, terminal, git, other)")
+  .option("-s, --status <status>", "Filter by status (starting, running, exited, error)")
+  .action(async (options) => {
+    heading("Tracked Processes");
+
+    try {
+      // Make HTTP request to debug API
+      const backendUrl = process.env.BACKEND_URL || "http://localhost:3000";
+      const response = await fetch(`${backendUrl}/api/debug/processes`);
+
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}: ${response.statusText}`);
+      }
+
+      const processes = await response.json();
+
+      // Filter by type
+      let filtered = processes;
+      if (options.type) {
+        filtered = filtered.filter((p: any) => p.type === options.type);
+      }
+      if (options.status) {
+        filtered = filtered.filter((p: any) => p.status === options.status);
+      }
+
+      if (filtered.length === 0) {
+        info("No processes found");
+        return;
+      }
+
+      console.log(
+        `${"ID".padEnd(25)} ${"Name".padEnd(35)} ${"Type".padEnd(10)} ${"Status".padEnd(12)} PID`
+      );
+      console.log("─".repeat(95));
+
+      for (const proc of filtered) {
+        const statusColor =
+          proc.status === "running"
+            ? colors.green
+            : proc.status === "starting"
+              ? colors.blue
+              : proc.status === "exited"
+                ? colors.yellow
+                : colors.red;
+
+        const status = `${statusColor}${proc.status}${colors.reset}`;
+        const id = proc.id.substring(0, 24);
+        const name = (proc.name || "Untitled").substring(0, 34);
+
+        console.log(
+          `${id.padEnd(25)} ${name.padEnd(35)} ${proc.type.padEnd(10)} ${status.padEnd(12)} ${proc.pid || "-"}`
+        );
+      }
+
+      console.log();
+      info(
+        `Total: ${filtered.length} processes (${processes.filter((p: any) => p.status === "running").length} running)`
+      );
+    } catch (err: any) {
+      error(`Failed to fetch processes: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+debugCmd
+  .command("show")
+  .description("Show detailed information about a process")
+  .requiredOption("-i, --id <processId>", "Process ID")
+  .option("--io", "Show I/O logs")
+  .option("--conversation", "Show conversation logs (for Qwen processes)")
+  .option("--tools", "Show tool usage (for Qwen processes)")
+  .option("--limit <n>", "Limit number of log entries (default: 50)", "50")
+  .action(async (options) => {
+    try {
+      const backendUrl = process.env.BACKEND_URL || "http://localhost:3000";
+
+      // Fetch process details
+      const procResponse = await fetch(`${backendUrl}/api/debug/processes/${options.id}`);
+      if (!procResponse.ok) {
+        throw new Error(`Process not found: ${options.id}`);
+      }
+      const proc = await procResponse.json();
+
+      heading(`Process: ${proc.name}`);
+
+      // Basic info
+      console.log(`${colors.bright}ID:${colors.reset}              ${proc.id}`);
+      console.log(`${colors.bright}Type:${colors.reset}            ${proc.type}`);
+      console.log(`${colors.bright}PID:${colors.reset}             ${proc.pid || "N/A"}`);
+      console.log(`${colors.bright}Status:${colors.reset}          ${proc.status}`);
+      console.log(
+        `${colors.bright}Command:${colors.reset}         ${proc.command} ${proc.args.join(" ")}`
+      );
+      console.log(`${colors.bright}Working Dir:${colors.reset}     ${proc.cwd}`);
+      console.log(
+        `${colors.bright}Started:${colors.reset}         ${new Date(proc.startTime).toLocaleString()}`
+      );
+
+      if (proc.endTime) {
+        console.log(
+          `${colors.bright}Ended:${colors.reset}           ${new Date(proc.endTime).toLocaleString()}`
+        );
+      }
+      if (proc.exitCode !== undefined) {
+        console.log(`${colors.bright}Exit Code:${colors.reset}       ${proc.exitCode}`);
+      }
+      if (proc.signal) {
+        console.log(`${colors.bright}Signal:${colors.reset}          ${proc.signal}`);
+      }
+
+      // Session info
+      if (proc.purpose) {
+        console.log(`\n${colors.bright}Purpose:${colors.reset}         ${proc.purpose}`);
+      }
+      if (proc.initiator) {
+        console.log(
+          `${colors.bright}Initiator:${colors.reset}       ${proc.initiator.type} (${proc.initiator.username || "system"})`
+        );
+        if (proc.initiator.userId) {
+          console.log(`${colors.bright}User ID:${colors.reset}         ${proc.initiator.userId}`);
+        }
+      }
+      if (proc.sessionInfo) {
+        console.log(
+          `\n${colors.bright}Session ID:${colors.reset}      ${proc.sessionInfo.sessionId}`
+        );
+        console.log(
+          `${colors.bright}Reopen Count:${colors.reset}    ${proc.sessionInfo.reopenCount}`
+        );
+        console.log(
+          `${colors.bright}First Opened:${colors.reset}    ${new Date(proc.sessionInfo.firstOpened).toLocaleString()}`
+        );
+        console.log(
+          `${colors.bright}Last Opened:${colors.reset}     ${new Date(proc.sessionInfo.lastOpened).toLocaleString()}`
+        );
+      }
+      if (proc.attachments) {
+        if (proc.attachments.transport) {
+          console.log(
+            `\n${colors.bright}Transport:${colors.reset}       ${proc.attachments.transport}`
+          );
+        }
+        if (proc.attachments.chainInfo) {
+          console.log(`${colors.bright}Chain Info:${colors.reset}`);
+          if (proc.attachments.chainInfo.managerId) {
+            console.log(`  Manager:  ${proc.attachments.chainInfo.managerId}`);
+          }
+          if (proc.attachments.chainInfo.workerId) {
+            console.log(`  Worker:   ${proc.attachments.chainInfo.workerId}`);
+          }
+          if (proc.attachments.chainInfo.aiId) {
+            console.log(`  AI:       ${proc.attachments.chainInfo.aiId}`);
+          }
+        }
+      }
+
+      // I/O logs
+      if (options.io) {
+        const ioResponse = await fetch(
+          `${backendUrl}/api/debug/processes/${options.id}/io?limit=${options.limit}`
+        );
+        if (ioResponse.ok) {
+          const ioLogs = await ioResponse.json();
+          if (ioLogs.length > 0) {
+            console.log(
+              `\n${colors.bright}${colors.cyan}I/O Logs (last ${ioLogs.length}):${colors.reset}\n`
+            );
+            for (const log of ioLogs.slice(-20)) {
+              const dirColor =
+                log.direction === "stdin"
+                  ? colors.blue
+                  : log.direction === "stdout"
+                    ? colors.green
+                    : colors.red;
+              const timestamp = new Date(log.timestamp).toLocaleTimeString();
+              console.log(
+                `[${timestamp}] ${dirColor}${log.direction.toUpperCase()}${colors.reset}:`
+              );
+              console.log(log.content.substring(0, 200) + (log.content.length > 200 ? "..." : ""));
+              console.log();
+            }
+          }
+        }
+      }
+
+      // Conversation logs (for Qwen processes)
+      if (options.conversation && proc.type === "qwen") {
+        const convResponse = await fetch(
+          `${backendUrl}/api/debug/processes/${options.id}/conversation?limit=${options.limit}`
+        );
+        if (convResponse.ok) {
+          const messages = await convResponse.json();
+          if (messages.length > 0) {
+            console.log(
+              `\n${colors.bright}${colors.cyan}Conversation (last ${messages.length} messages):${colors.reset}\n`
+            );
+            for (const msg of messages.slice(-10)) {
+              const roleColor =
+                msg.role === "user"
+                  ? colors.blue
+                  : msg.role === "assistant"
+                    ? colors.green
+                    : colors.yellow;
+              const timestamp = new Date(msg.timestamp).toLocaleTimeString();
+              console.log(`[${timestamp}] ${roleColor}${msg.role.toUpperCase()}${colors.reset}:`);
+              console.log(msg.content.substring(0, 300) + (msg.content.length > 300 ? "..." : ""));
+              console.log();
+            }
+          }
+        }
+      }
+
+      // Tool usage (for Qwen processes)
+      if (options.tools && proc.type === "qwen") {
+        const toolsResponse = await fetch(
+          `${backendUrl}/api/debug/processes/${options.id}/tools?limit=${options.limit}`
+        );
+        if (toolsResponse.ok) {
+          const tools = await toolsResponse.json();
+          if (tools.length > 0) {
+            console.log(
+              `\n${colors.bright}${colors.cyan}Tool Usage (last ${tools.length} tools):${colors.reset}\n`
+            );
+            for (const tool of tools.slice(-10)) {
+              const timestamp = new Date(tool.timestamp).toLocaleTimeString();
+              console.log(
+                `[${timestamp}] ${colors.bright}${tool.toolName}${colors.reset} (${tool.status})`
+              );
+              console.log(`  Args: ${JSON.stringify(tool.args).substring(0, 200)}`);
+              if (tool.confirmationDetails) {
+                console.log(
+                  `  Approval: ${tool.approved ? colors.green + "✓" + colors.reset : colors.red + "✗" + colors.reset} ${tool.confirmationDetails.message}`
+                );
+              }
+              console.log();
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      error(`Failed to show process: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+debugCmd
+  .command("stats")
+  .description("Show debug statistics")
+  .action(async () => {
+    heading("Debug Statistics");
+
+    try {
+      const backendUrl = process.env.BACKEND_URL || "http://localhost:3000";
+      const response = await fetch(`${backendUrl}/api/debug/stats`);
+
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}: ${response.statusText}`);
+      }
+
+      const stats = await response.json();
+
+      console.log(`${colors.bright}Total Processes:${colors.reset} ${stats.totalProcesses}`);
+      console.log(`  ${colors.green}Running:${colors.reset}  ${stats.running}`);
+      console.log(`  ${colors.yellow}Exited:${colors.reset}   ${stats.exited}`);
+      console.log(`  ${colors.red}Errors:${colors.reset}   ${stats.errors}`);
+      console.log();
+      console.log(`${colors.bright}By Type:${colors.reset}`);
+      console.log(`  Qwen:     ${stats.byType.qwen}`);
+      console.log(`  Terminal: ${stats.byType.terminal}`);
+      console.log(`  Git:      ${stats.byType.git}`);
+      console.log(`  Other:    ${stats.byType.other}`);
+    } catch (err: any) {
+      error(`Failed to fetch stats: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+// ============================================================================
 // HEALTH CHECK COMMANDS
 // ============================================================================
 
