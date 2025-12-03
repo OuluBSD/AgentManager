@@ -35,14 +35,24 @@ interface UseAIChatBackendOptions {
     final: boolean;
     messageId?: number;
   }) => void;
+  onCompletionStats?: (payload: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    contextLimit?: number;
+    contextRemaining?: number;
+    raw?: any;
+  }) => void;
 }
 
-function formatToolCall(tool: any): { label: string; content: string } {
+function formatToolCall(tool: any, opts?: { autoApproved?: boolean }): { label: string; content: string } {
   const rawLabel = (typeof tool?.tool_name === "string" && tool.tool_name.trim()) || "tool";
   const label =
     rawLabel.toLowerCase().includes("shell") || rawLabel.toLowerCase().includes("bash")
       ? "Shell"
       : rawLabel;
+  const requiresApproval =
+    tool?.confirmation_details?.requires_approval || tool?.requires_approval || false;
   const args = (tool && typeof tool === "object" && tool.args) || {};
   const primaryArg =
     typeof args.command === "string"
@@ -57,14 +67,12 @@ function formatToolCall(tool: any): { label: string; content: string } {
     (args && typeof args === "object" && Object.keys(args).length
       ? JSON.stringify(args, null, 2)
       : "");
-  const statusText = tool?.status ? ` [${tool.status}]` : "";
-  const approvalText =
-    tool?.confirmation_details?.requires_approval || tool?.requires_approval
-      ? " (awaiting approval)"
-      : "";
-  const header = `${label}${statusText}${approvalText}`;
-  const content = argPreview ? `${header}\n${argPreview}` : header;
-  return { label, content };
+  const statusText = tool?.status ? tool.status.toString().toLowerCase() : "";
+  const approvalText = requiresApproval && !opts?.autoApproved ? " (awaiting approval)" : "";
+  const header = statusText ? statusText.charAt(0).toUpperCase() + statusText.slice(1) : "Running";
+  const content = approvalText ? `${header}${approvalText}` : header;
+  const body = argPreview ? `${header}\n${argPreview}` : content;
+  return { label, content: body };
 }
 
 function stripStatus(label: string): string {
@@ -96,6 +104,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
   const [isConnected, setIsConnected] = useState(false);
   const nextMessageId = useRef(1);
   const wsRef = useRef<WebSocket | null>(null);
+  const autoApprovedToolsRef = useRef<Set<string>>(new Set());
   const connectionId = useRef(Math.random().toString(36));
   const streamingContentRef = useRef("");
   const optionsRef = useRef(options);
@@ -217,6 +226,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
         wsRef.current = null;
         toolPendingRef.current = false;
         lastToolMessageId.current = null;
+        autoApprovedToolsRef.current.clear();
       };
   }, [
     options.backend,
@@ -253,6 +263,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     toolPendingRef.current = false;
     lastToolMessageId.current = null;
     pendingMessagesRef.current = [];
+    autoApprovedToolsRef.current.clear();
   }, []);
 
   // Send message to backend
@@ -480,11 +491,51 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       case "tool_group":
         // Tool execution notification
         setStatusMessage(`Executing ${msg.tools?.length || 0} tool(s)...`);
+        const autoApproved: string[] = [];
+        if (Array.isArray((msg as any).tools)) {
+          for (const tool of (msg as any).tools) {
+            const requiresApproval =
+              tool?.confirmation_details?.requires_approval || tool?.requires_approval;
+            const toolId = tool?.tool_id;
+            if (
+              requiresApproval &&
+              typeof toolId === "string" &&
+              !autoApprovedToolsRef.current.has(toolId) &&
+              wsRef.current &&
+              wsRef.current.readyState === WebSocket.OPEN
+            ) {
+              try {
+                wsRef.current.send(
+                  JSON.stringify({
+                    type: "tool_approval",
+                    approved: true,
+                    tool_id: toolId,
+                  })
+                );
+                autoApprovedToolsRef.current.add(toolId);
+                autoApproved.push(toolId);
+                // Once approved, clear pending status for UI readability
+                if (tool.status === "pending" || tool.status === "waiting_for_confirmation") {
+                  tool.status = "running";
+                }
+              } catch (err) {
+                console.error("Failed to auto-approve tool", err);
+              }
+            }
+          }
+        }
+        if (autoApproved.length) {
+          setStatusMessage(
+            `Executing ${msg.tools?.length || 0} tool(s)... auto-approved ${autoApproved.length}`
+          );
+        }
         if (Array.isArray((msg as any).tools) && (msg as any).tools.length > 0) {
-          const toolDetails = (msg as any).tools.map((tool: any) => formatToolCall(tool));
+          const toolDetails = (msg as any).tools.map((tool: any) =>
+            formatToolCall(tool, { autoApproved: autoApprovedToolsRef.current.has(tool?.tool_id) })
+          );
           const content = toolDetails.map((tool) => tool.content).join("\n\n");
           const displayRole =
-            toolDetails.length === 1 ? toolDetails[0].label : `${toolDetails.length} tools`;
+            toolDetails.length === 1 ? toolDetails[0].label || "tool" : `${toolDetails.length} tools`;
           const toolMessage: ChatMessage = {
             id: nextMessageId.current++,
             role: "tool",
@@ -510,6 +561,33 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
         setIsStreaming(false);
         setStatus("idle");
         setStatusMessage("Ready");
+        {
+          const toNumber = (value: any) =>
+            typeof value === "number" && Number.isFinite(value) ? value : undefined;
+          const promptTokens = toNumber((msg as any).prompt_tokens);
+          const completionTokens = toNumber((msg as any).completion_tokens);
+          const totalTokens =
+            toNumber((msg as any).total_tokens) ??
+            (promptTokens !== undefined || completionTokens !== undefined
+              ? (promptTokens ?? 0) + (completionTokens ?? 0)
+              : undefined);
+          const contextLimit =
+            toNumber((msg as any).context_window) ??
+            toNumber((msg as any).context_limit) ??
+            toNumber((msg as any).contextLength);
+          const contextRemaining =
+            toNumber((msg as any).context_tokens_left) ??
+            toNumber((msg as any).context_remaining);
+
+          optionsRef.current.onCompletionStats?.({
+            promptTokens,
+            completionTokens,
+            totalTokens,
+            contextLimit,
+            contextRemaining,
+            raw: msg,
+          });
+        }
         if (toolPendingRef.current) {
           setMessages((prev) =>
             prev.map((m) =>

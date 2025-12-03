@@ -11,9 +11,11 @@ import { useAIChatBackend } from "../hooks/useAIChatBackend";
 
 interface ChatMessage {
   id: number;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: number;
+  metadata?: Record<string, unknown>;
+  displayRole?: string;
 }
 
 interface ChatSession {
@@ -242,7 +244,9 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
             messages.map((msg) => (
               <div key={msg.id} className={`ai-chat-message ${msg.role}`}>
                 <div className="ai-chat-message-header">
-                  <span className={`ai-chat-message-role ${msg.role}`}>{msg.role}</span>
+                  <span className={`ai-chat-message-role ${msg.role}`}>
+                    {msg.displayRole || msg.role}
+                  </span>
                   <span className="ai-chat-message-time">{formatTime(msg.timestamp)}</span>
                 </div>
                 <div className="ai-chat-message-content">{msg.content}</div>

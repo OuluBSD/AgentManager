@@ -45,7 +45,7 @@ export type Chat = {
 export type Message = {
   id: string;
   chatId: string;
-  role: "user" | "assistant" | "system" | "status" | "meta";
+  role: "user" | "assistant" | "system" | "status" | "meta" | "tool";
   content: string;
   metadata?: Record<string, unknown>;
   createdAt: string;

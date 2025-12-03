@@ -4,6 +4,7 @@ import {
   dbCreateChat,
   dbFindChatForMerge,
   dbGetChat,
+  dbClearMessages,
   dbGetMessages,
   dbGetTemplate,
   dbListChats,
@@ -13,6 +14,7 @@ import {
 } from "../services/projectRepository";
 import {
   addMessage,
+  clearMessages,
   createChat,
   findChatForMerge,
   getChat,
@@ -287,15 +289,71 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     reply.send(getMessages(chatId));
   });
 
+  fastify.delete("/chats/:chatId/messages", async (request, reply) => {
+    const session = await requireSession(request, reply);
+    if (!session) return;
+
+    const chatId = (request.params as { chatId: string }).chatId;
+    let chat = null;
+    if (fastify.db) {
+      try {
+        chat = await dbGetChat(fastify.db, chatId);
+      } catch (err) {
+        fastify.log.error({ err }, "Failed to fetch chat from database");
+      }
+    }
+    if (!chat) {
+      chat = getChat(chatId);
+    }
+    if (!chat) {
+      reply.code(404).send({ error: { code: "not_found", message: "Chat not found" } });
+      return;
+    }
+
+    let removed = 0;
+    if (fastify.db) {
+      try {
+        removed = await dbClearMessages(fastify.db, chatId);
+      } catch (err) {
+        fastify.log.error(
+          { err },
+          "Failed to clear chat messages in database; falling back to memory."
+        );
+        removed = clearMessages(chatId);
+      }
+    } else {
+      removed = clearMessages(chatId);
+    }
+
+    reply.send({ removed });
+
+    await recordAuditEvent(fastify, {
+      userId: session.userId,
+      eventType: "chat:reset",
+      metadata: {
+        chatId,
+        removedMessages: removed,
+      },
+    });
+  });
+
   fastify.post("/chats/:chatId/messages", async (request, reply) => {
     const session = await requireSession(request, reply);
     if (!session) return;
 
     const chatId = (request.params as { chatId: string }).chatId;
     const body = request.body as {
-      role: "user" | "assistant" | "system" | "status" | "meta";
+      role: "user" | "assistant" | "system" | "status" | "meta" | "tool";
       content: string;
+      metadata?: Record<string, unknown>;
     };
+    const incomingContent = typeof body.content === "string" ? body.content : "";
+    const contentToStore =
+      incomingContent && incomingContent.trim()
+        ? incomingContent
+        : body.role === "tool"
+          ? "(tool output unavailable)"
+          : incomingContent;
 
     // Fetch chat and template for JSON status processing
     let chat = null;
@@ -320,7 +378,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     let jsonResult = null;
     if (body.role === "assistant" && chat && template) {
       try {
-        jsonResult = await processMessageForJSON(body.content, chat, template);
+        jsonResult = await processMessageForJSON(incomingContent, chat, template);
         if (!jsonResult.valid && jsonResult.needsReformat) {
           // Add a system message requesting reformatted JSON
           const errorMessage = {
@@ -361,7 +419,8 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         message = await dbAddMessage(fastify.db, chatId, {
           role: body.role ?? "user",
-          content: body.content,
+          content: contentToStore,
+          metadata: body.metadata,
         });
         reply.code(201).send({ id: message.id });
       } catch (err) {
@@ -369,7 +428,8 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         message = addMessage(chatId, {
           chatId,
           role: body.role ?? "user",
-          content: body.content,
+          content: contentToStore,
+          metadata: body.metadata,
         });
         reply.code(201).send({ id: message.id });
       }
@@ -377,7 +437,8 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       message = addMessage(chatId, {
         chatId,
         role: body.role ?? "user",
-        content: body.content,
+        content: contentToStore,
+        metadata: body.metadata,
       });
       reply.code(201).send({ id: message.id });
     }
@@ -389,7 +450,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         chatId,
         messageId: message.id,
         role: body.role,
-        contentLength: body.content.length,
+        contentLength: contentToStore.length,
       },
     });
   });

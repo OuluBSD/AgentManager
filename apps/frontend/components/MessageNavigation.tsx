@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 type Message = {
   id: string;
-  role: "user" | "assistant" | "system" | "status" | "meta";
+  role: "user" | "assistant" | "system" | "status" | "meta" | "tool";
   content: string;
   createdAt: string;
 };

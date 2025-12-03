@@ -262,10 +262,30 @@ export async function fetchChatMessages(
   return fetchWithAuth(token, `/api/chats/${chatId}/messages`);
 }
 
+export async function clearChatMessages(
+  token: string,
+  chatId: string
+): Promise<{ removed: number }> {
+  const res = await fetch(`${API_BASE}/api/chats/${chatId}/messages`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to reset chat (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function postChatMessage(
   token: string,
   chatId: string,
-  payload: { role: "user" | "assistant" | "system" | "status" | "meta"; content: string }
+  payload: {
+    role: "user" | "assistant" | "system" | "status" | "meta" | "tool";
+    content: string;
+    metadata?: Record<string, unknown>;
+  }
 ): Promise<{ id: string }> {
   const res = await fetch(`${API_BASE}/api/chats/${chatId}/messages`, {
     method: "POST",

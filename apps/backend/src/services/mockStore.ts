@@ -327,6 +327,13 @@ export function getMessages(chatId: string) {
   return store.messages.get(chatId) ?? [];
 }
 
+export function clearMessages(chatId: string): number {
+  const existing = store.messages.get(chatId) ?? [];
+  store.messages.set(chatId, []);
+  triggerPersist();
+  return existing.length;
+}
+
 export function addMetaChatMessage(
   metaChatId: string,
   message: Omit<MetaChatMessage, "id" | "createdAt">

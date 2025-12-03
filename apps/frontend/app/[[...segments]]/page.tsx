@@ -13,6 +13,7 @@ import {
   fetchRoadmaps,
   fetchFileDiff,
   fetchChatMessages,
+  clearChatMessages,
   fetchMetaChatMessages,
   createProject,
   createRoadmap,
@@ -71,6 +72,9 @@ const DEMO_KEYFILE = process.env.NEXT_PUBLIC_DEMO_KEYFILE_TOKEN;
 const PROJECT_STORAGE_KEY = "agentmgr:selectedProject";
 const ROADMAP_STORAGE_KEY = "agentmgr:selectedRoadmap";
 const CHAT_STORAGE_KEY = "agentmgr:selectedChat";
+const parsedContextLimit = Number(process.env.NEXT_PUBLIC_AI_CONTEXT_LIMIT ?? "");
+const DEFAULT_CONTEXT_LIMIT =
+  Number.isFinite(parsedContextLimit) && parsedContextLimit > 0 ? parsedContextLimit : 128000;
 
 type ProjectItem = {
   id?: string;
@@ -111,6 +115,14 @@ type MessageItem = {
   content: string;
   createdAt: string;
   displayRole?: string | null;
+};
+type TokenUsage = {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  contextLimit?: number;
+  contextRemaining?: number;
+  updatedAt: number;
 };
 type AuditEvent = {
   id: string;
@@ -230,6 +242,62 @@ function dedupeMessages(items: MessageItem[]): MessageItem[] {
     result.push(item);
   }
   return result;
+}
+
+function messageKey(message: MessageItem): string {
+  const trimmedContent = (message.content || "").trim();
+  const displayRole = (message.displayRole || "").trim();
+  return `${message.chatId}|${message.role}|${trimmedContent}|${displayRole || "display"}`;
+}
+
+function mergeMessages(existing: MessageItem[], incoming: MessageItem[]): MessageItem[] {
+  const isTempId = (id?: string | null) =>
+    typeof id === "string" && /^(assistant|tool|user)-\d+/.test(id);
+  const deduped: Record<string, MessageItem> = {};
+  const combined = [...existing, ...incoming].map((message) => ({
+    ...message,
+    createdAt: message.createdAt || new Date().toISOString(),
+  }));
+  combined.sort((a, b) => {
+    const aTime = Date.parse(a.createdAt);
+    const bTime = Date.parse(b.createdAt);
+    return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
+  });
+  for (const message of combined) {
+    const key = messageKey(message);
+    const current = deduped[key];
+    if (!current) {
+      deduped[key] = message;
+      continue;
+    }
+    const currentTemp = isTempId(current.id);
+    const nextTemp = isTempId(message.id);
+    if (currentTemp && !nextTemp) {
+      deduped[key] = message;
+      continue;
+    }
+    if (!currentTemp && nextTemp) {
+      continue;
+    }
+    const currentTime = Date.parse(current.createdAt);
+    const nextTime = Date.parse(message.createdAt);
+    deduped[key] = (Number.isFinite(nextTime) ? nextTime : 0) >= (Number.isFinite(currentTime) ? currentTime : 0)
+      ? message
+      : current;
+  }
+  return Object.values(deduped).sort((a, b) => {
+    const aTime = Date.parse(a.createdAt);
+    const bTime = Date.parse(b.createdAt);
+    return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
+  });
+}
+
+function messagesEqual(a: MessageItem[], b: MessageItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (messageKey(a[i]) !== messageKey(b[i])) return false;
+  }
+  return true;
 }
 
 const SETTINGS_SECTIONS: { key: SettingsCategory; label: string; detail: string }[] = [
@@ -802,12 +870,16 @@ export default function Page() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
   const [messagesForChatId, setMessagesForChatId] = useState<string | null>(null);
+  const [messageCache, setMessageCache] = useState<Record<string, MessageItem[]>>({});
   const [chatSessionState, setChatSessionState] = useState<
     "idle" | "hydrating" | "ready" | "error"
   >("idle");
   const [chatHydrationTrigger, setChatHydrationTrigger] = useState(0);
   const [chatSessionError, setChatSessionError] = useState<string | null>(null);
   const [chatSessionSteps, setChatSessionSteps] = useState<ChatSessionStep[]>([]);
+  const [chatSessionNonces, setChatSessionNonces] = useState<Record<string, number>>({});
+  const [chatTokenUsage, setChatTokenUsage] = useState<Record<string, TokenUsage>>({});
+  const [resettingChatSession, setResettingChatSession] = useState(false);
   const [messageDraft, setMessageDraft] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
   const [messageFilter, setMessageFilter] = useState<
@@ -828,9 +900,11 @@ export default function Page() {
   const messagesRef = useRef<MessageItem[]>([]);
   const messagesLoadingRef = useRef(false);
   const messagesForChatRef = useRef<string | null>(null);
+  const messageCacheRef = useRef<Record<string, MessageItem[]>>({});
   const isChatAiConnectedRef = useRef(false);
   const chatHydrationRunIdRef = useRef(0);
   const aiSessionResumeRef = useRef<Record<string, { hydratedAt: number }>>({});
+  const persistedToolMessagesRef = useRef<Set<string>>(new Set());
   const updateChatSessionStep = useCallback(
     (key: string, patch: Partial<ChatSessionStep>) => {
       setChatSessionSteps((prev) => {
@@ -902,6 +976,7 @@ export default function Page() {
     [resolvedGlobalThemeMode, selectedProject?.theme]
   );
   const selectedChat = chats.find((c) => c.id === selectedChatId);
+  const chatSessionNonce = selectedChatId ? chatSessionNonces[selectedChatId] ?? 0 : 0;
   const isMetaChatSelected = selectedChat?.meta;
   const templateForChat = selectedChat?.templateId
     ? templates.find((t) => t.id === selectedChat.templateId)
@@ -925,7 +1000,7 @@ export default function Page() {
     isConnected: isChatAiConnected,
   } = useAIChatBackend({
     backend: "qwen",
-    sessionId: selectedChatId ? `chat-${selectedChatId}` : "agent-manager",
+    sessionId: selectedChatId ? `chat-${selectedChatId}-n${chatSessionNonce}` : "agent-manager",
     token: sessionToken ?? "",
     allowChallenge: false,
     workspacePath: resolvedChatWorkspacePath || undefined,
@@ -996,20 +1071,50 @@ export default function Page() {
         updateChatSessionStep("connect", { detail: message });
       }
     },
+    onCompletionStats: (stats) => {
+      if (!selectedChatId || selectedChatId.startsWith("meta-")) return;
+      const limit = stats.contextLimit && stats.contextLimit > 0 ? stats.contextLimit : DEFAULT_CONTEXT_LIMIT;
+      const total =
+        stats.totalTokens ??
+        (stats.promptTokens !== undefined || stats.completionTokens !== undefined
+          ? (stats.promptTokens ?? 0) + (stats.completionTokens ?? 0)
+          : undefined);
+      const remaining =
+        stats.contextRemaining !== undefined
+          ? stats.contextRemaining
+          : limit && total !== undefined
+            ? Math.max(limit - total, 0)
+            : undefined;
+      setChatTokenUsage((prev) => ({
+        ...prev,
+        [selectedChatId]: {
+          promptTokens: stats.promptTokens,
+          completionTokens: stats.completionTokens,
+          totalTokens: total,
+          contextLimit: limit || undefined,
+          contextRemaining: remaining,
+          updatedAt: Date.now(),
+        },
+      }));
+    },
     onToolMessage: ({ content, displayRole, messageId }) => {
       if (!selectedChatId || selectedChatId.startsWith("meta-")) return;
+      const resolvedContent = content && content.trim() ? content : "(tool running)";
       const baseId =
         typeof messageId === "number"
           ? (toolMessageMapRef.current[messageId] ??
             (toolMessageMapRef.current[messageId] = `tool-${messageId}`))
           : `tool-${Date.now()}`;
+      const persistKey = `${selectedChatId}:${baseId}`;
+      const alreadyPersisted = persistedToolMessagesRef.current.has(persistKey);
       const createdAt = new Date().toISOString();
+      let shouldPersist = false;
       setMessages((prev) => {
         const next: MessageItem = {
           id: baseId,
           chatId: selectedChatId,
           role: "tool",
-          content: content || "(tool running)",
+          content: resolvedContent,
           createdAt,
           displayRole: displayRole ?? "tool",
         };
@@ -1019,8 +1124,22 @@ export default function Page() {
           updated[existingIndex] = { ...updated[existingIndex], ...next };
           return dedupeMessages(updated);
         }
+        shouldPersist = true;
         return dedupeMessages([...prev, next]);
       });
+      if (shouldPersist && sessionToken && !alreadyPersisted) {
+        postChatMessage(sessionToken, selectedChatId, {
+          role: "tool",
+          content: resolvedContent,
+          metadata: displayRole ? { displayRole } : undefined,
+        })
+          .then(() => {
+            persistedToolMessagesRef.current.add(persistKey);
+          })
+          .catch((err) => {
+            setMessagesError(err instanceof Error ? err.message : "Failed to persist tool message");
+          });
+      }
     },
   });
   const [autoDemoAiEnabled, setAutoDemoAiEnabled] = useState(false);
@@ -1066,6 +1185,22 @@ export default function Page() {
   }, [messagesForChatId]);
 
   useEffect(() => {
+    messageCacheRef.current = messageCache;
+  }, [messageCache]);
+
+  useEffect(() => {
+    if (!messagesForChatId) return;
+    setMessageCache((prev) => {
+      const cached = prev[messagesForChatId] ?? [];
+      const merged = mergeMessages(cached, messages);
+      if (messagesEqual(cached, merged)) return prev;
+      const next = { ...prev, [messagesForChatId]: merged };
+      messageCacheRef.current = next;
+      return next;
+    });
+  }, [messages, messagesForChatId]);
+
+  useEffect(() => {
     isChatAiConnectedRef.current = isChatAiConnected;
   }, [isChatAiConnected]);
 
@@ -1076,7 +1211,7 @@ export default function Page() {
       repoHint === autoDemoWorkspace.repo);
 
   useEffect(() => {
-    if (!sessionToken || !selectedChatId || selectedChatId.startsWith("meta-")) {
+    if (!sessionToken || !selectedChatId || selectedChatId.startsWith("meta-") || selectedChat?.meta) {
       setAiStreamingPreview("");
       disconnectChatAi();
       return;
@@ -1085,7 +1220,14 @@ export default function Page() {
     return () => {
       disconnectChatAi();
     };
-  }, [connectChatAi, disconnectChatAi, selectedChatId, sessionToken]);
+  }, [
+    chatSessionNonce,
+    connectChatAi,
+    disconnectChatAi,
+    selectedChat?.meta,
+    selectedChatId,
+    sessionToken,
+  ]);
 
   useEffect(() => {
     if (autoDemoAiEnabled && sessionToken) {
@@ -1129,9 +1271,15 @@ export default function Page() {
           const metaChat = Object.values(metaChats).find((mc) => mc.roadmapListId === metaChatId);
           if (metaChat) {
             const items = await fetchMetaChatMessages(token, metaChat.id);
-            const mapped = items.map((m) => ({ ...m, chatId: m.metaChatId })) as MessageItem[];
-            setMessages(dedupeMessages(mapped));
+      const mapped = items.map((m) => ({ ...m, chatId: m.metaChatId })) as MessageItem[];
+      const merged = mergeMessages(messageCacheRef.current[chatId] ?? [], mapped);
+            setMessages(merged);
             setMessagesForChatId(chatId);
+            setMessageCache((prev) => {
+              const next = { ...prev, [chatId]: merged };
+              messageCacheRef.current = next;
+              return next;
+            });
           } else {
             setMessages([]);
             setMessagesError("Meta-chat not found");
@@ -1140,8 +1288,22 @@ export default function Page() {
         } else {
           // Load regular chat messages
           const items = await fetchChatMessages(token, chatId);
-          setMessages(dedupeMessages(items as MessageItem[]));
+          const mapped = (items as MessageItem[]).map((m) => ({
+            ...m,
+            displayRole:
+              m.displayRole ??
+              (typeof (m as any)?.metadata?.displayRole === "string"
+                ? ((m as any).metadata!.displayRole as string)
+                : undefined),
+          }));
+          const merged = mergeMessages(messageCacheRef.current[chatId] ?? [], mapped);
+          setMessages(merged);
           setMessagesForChatId(chatId);
+          setMessageCache((prev) => {
+            const next = { ...prev, [chatId]: merged };
+            messageCacheRef.current = next;
+            return next;
+          });
         }
       } catch (err) {
         setMessagesError(err instanceof Error ? err.message : "Failed to load messages");
@@ -1283,6 +1445,7 @@ export default function Page() {
     connectChatAi,
     loadMessagesForChat,
     chatHydrationTrigger,
+    chatSessionNonce,
     selectedChat?.meta,
     selectedChatId,
     sendChatAiBackground,
@@ -1742,6 +1905,8 @@ export default function Page() {
       setCreatingRoadmap(false);
       setCreatingChat(false);
       setMessages([]);
+      setMessageCache({});
+      messageCacheRef.current = {};
       setMessagesError(null);
       setMessagesForChatId(null);
       setMessageDraft("");
@@ -2143,6 +2308,14 @@ export default function Page() {
       setSelectedChatId(chat.id);
       setMessagesError(null);
       setMessageDraft("");
+      const cachedMessages = messageCacheRef.current[chat.id];
+      if (cachedMessages) {
+        setMessages(cachedMessages);
+        setMessagesForChatId(chat.id);
+      } else {
+        setMessages([]);
+        setMessagesForChatId(null);
+      }
       setChatHydrationTrigger((prev) => prev + 1);
       setChatSessionState("hydrating");
       setChatSessionError(null);
@@ -3149,6 +3322,57 @@ export default function Page() {
     messageInputRef.current?.focus();
   }, []);
 
+  const handleResetChatSession = useCallback(async () => {
+    if (!sessionToken || !selectedChatId) {
+      setMessagesError("Select a chat to reset the session.");
+      return;
+    }
+    if (selectedChatId.startsWith("meta-")) {
+      setMessagesError("Meta-chat session resets are not available.");
+      return;
+    }
+    setResettingChatSession(true);
+    setChatSessionError(null);
+    setChatSessionSteps([]);
+    try {
+      await clearChatMessages(sessionToken, selectedChatId);
+      disconnectChatAi();
+      delete aiSessionResumeRef.current[selectedChatId];
+      setChatSessionNonces((prev) => ({
+        ...prev,
+        [selectedChatId]: (prev[selectedChatId] ?? 0) + 1,
+      }));
+      setMessages([]);
+      setMessageCache((prev) => {
+        const next = { ...prev };
+        delete next[selectedChatId];
+        messageCacheRef.current = next;
+        return next;
+      });
+      messagesRef.current = [];
+      setMessagesForChatId(selectedChatId);
+      messagesForChatRef.current = selectedChatId;
+      setChatTokenUsage((prev) => {
+        const next = { ...prev };
+        delete next[selectedChatId];
+        return next;
+      });
+      setStatusMessage("Chat session reset. Preparing a fresh AI session…");
+      await loadMessagesForChat(selectedChatId, sessionToken);
+      setChatHydrationTrigger((prev) => prev + 1);
+    } catch (err) {
+      setMessagesError(err instanceof Error ? err.message : "Failed to reset chat session");
+    } finally {
+      setResettingChatSession(false);
+    }
+  }, [
+    disconnectChatAi,
+    loadMessagesForChat,
+    selectedChatId,
+    sessionToken,
+    setChatSessionNonces,
+  ]);
+
   const handleUpdateChatStatus = useCallback(
     async (override?: { status?: Status; progressPercent?: number; focus?: string }) => {
       if (!sessionToken || !selectedChatId) {
@@ -3678,6 +3902,25 @@ export default function Page() {
     messageFilter === "all"
       ? messages
       : messages.filter((message) => message.role === messageFilter);
+  const selectedChatTokens = selectedChatId ? chatTokenUsage[selectedChatId] : null;
+  const contextLimitForChat =
+    selectedChatTokens?.contextLimit && selectedChatTokens.contextLimit > 0
+      ? selectedChatTokens.contextLimit
+      : DEFAULT_CONTEXT_LIMIT;
+  const totalUsedTokens =
+    selectedChatTokens?.totalTokens ??
+    (selectedChatTokens
+      ? (selectedChatTokens.promptTokens ?? 0) + (selectedChatTokens.completionTokens ?? 0)
+      : undefined);
+  const contextRemainingTokens =
+    selectedChatTokens?.contextRemaining ??
+    (totalUsedTokens !== undefined
+      ? Math.max((contextLimitForChat ?? 0) - totalUsedTokens, 0)
+      : undefined);
+  const contextLeftPercent =
+    contextRemainingTokens !== undefined && contextLimitForChat
+      ? Math.max(0, Math.min(100, (contextRemainingTokens / contextLimitForChat) * 100))
+      : null;
   const showChatLoader =
     !!selectedChat &&
     !isMetaChatSelected &&
@@ -3701,16 +3944,12 @@ export default function Page() {
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    if (chatStreamRef.current && messages.length > 0) {
-      const stream = chatStreamRef.current;
-      const isNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 100;
-      if (isNearBottom || messages.length === 1) {
-        setTimeout(() => {
-          stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
-        }, 100);
-      }
-    }
-  }, [messages.length]);
+    if (!chatStreamRef.current) return;
+    const stream = chatStreamRef.current;
+    setTimeout(() => {
+      stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
+    }, 50);
+  }, [visibleMessages.length, aiStreamingPreview, messagesForChatId]);
 
   const tabBody = (() => {
     switch (activeTab) {
@@ -3909,6 +4148,15 @@ export default function Page() {
                 disabled={!sessionToken || messagesLoading}
               >
                 {messagesLoading ? "Refreshing…" : "Refresh"}
+              </button>
+              <button
+                className="ghost"
+                onClick={handleResetChatSession}
+                disabled={
+                  !sessionToken || !selectedChatId || !!selectedChat?.meta || resettingChatSession
+                }
+              >
+                {resettingChatSession ? "Resetting…" : "Reset session"}
               </button>
               <button className="ghost" onClick={copySelectionLink} disabled={!selectedProjectId}>
                 Copy link
@@ -4265,21 +4513,40 @@ export default function Page() {
                   <span className="item-subtle">auto</span>
                 </div>
               )}
-              {visibleMessages.map((message) => (
-                <div
-                  className="chat-row"
-                  key={message.id}
-                  ref={(el) => messageNav.registerRef(message.id, el)}
-                >
-                  <span className={`chat-role chat-role-${message.role}`}>
-                    {message.displayRole ?? message.role}
-                  </span>
-                  <div className="bubble">{message.content}</div>
-                  <span className="item-subtle">
-                    {new Date(message.createdAt).toLocaleTimeString()}
-                  </span>
-                </div>
-              ))}
+              {visibleMessages.map((message) => {
+                const isTool = message.role === "tool";
+                const [toolStatus, ...toolRest] = isTool ? message.content.split("\n") : [];
+                const toolDetail = toolRest.join("\n");
+                return (
+                  <div
+                    className="chat-row"
+                    key={message.id}
+                    ref={(el) => messageNav.registerRef(message.id, el)}
+                  >
+                    <span className={`chat-role chat-role-${message.role}`}>
+                      {message.displayRole ?? message.role}
+                    </span>
+                    <div className="bubble">
+                      {isTool ? (
+                        <>
+                          <span className="tool-status">{toolStatus || "Running"}</span>
+                          {toolDetail && (
+                            <>
+                              <br />
+                              {toolDetail}
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        message.content
+                      )}
+                    </div>
+                    <span className="item-subtle">
+                      {new Date(message.createdAt).toLocaleTimeString()}
+                    </span>
+                  </div>
+                );
+              })}
               {aiStreamingPreview && !isMetaChatSelected && (
                 <div className="chat-row" key="assistant-streaming">
                   <span className="chat-role chat-role-assistant">assistant</span>
