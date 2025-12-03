@@ -141,7 +141,7 @@ class ManagerProxyBridge implements AiBridge {
 /**
  * Bridge that talks directly to a Qwen AI server (local or TCP).
  */
-class DirectQwenBridge implements AiBridge {
+export class DirectQwenBridge implements AiBridge {
   transport: AiTransport = "direct-qwen";
   chain: AiChainSelection;
   private client: QwenClient;
@@ -156,6 +156,19 @@ class DirectQwenBridge implements AiBridge {
       workspaceRoot?: string;
       model?: string;
       mode?: "stdio" | "tcp";
+      purpose?: string;
+      initiator?: {
+        type: "user" | "system";
+        userId?: string;
+        sessionId?: string;
+        username?: string;
+      };
+      sessionInfo?: {
+        sessionId: string;
+        reopenCount: number;
+        firstOpened: Date;
+        lastOpened: Date;
+      };
     }
   ) {
     this.chain = chain;
@@ -170,6 +183,17 @@ class DirectQwenBridge implements AiBridge {
       workspaceRoot,
       model: config?.model ?? ai.metadata?.model ?? process.env.DEFAULT_AI_MODEL,
       qwenPath: process.env.QWEN_PATH,
+      purpose: config?.purpose,
+      initiator: config?.initiator,
+      sessionInfo: config?.sessionInfo,
+      attachments: {
+        transport: mode,
+        chainInfo: {
+          managerId: chain.manager?.id,
+          workerId: chain.worker?.id,
+          aiId: chain.ai.id,
+        },
+      },
     });
 
     this.handler = (msg: QwenServerMessage) => {
@@ -187,8 +211,10 @@ class DirectQwenBridge implements AiBridge {
   }
 
   async shutdown(): Promise<void> {
+    this.log.info(`[DirectQwenBridge] shutdown() called - removing handler and stopping client`);
     this.client.removeMessageHandler(this.handler);
     await this.client.stop();
+    this.log.info(`[DirectQwenBridge] shutdown() completed`);
   }
 }
 
@@ -215,7 +241,25 @@ export async function createAiBridge(
   log: FastifyBaseLogger,
   chain: AiChainSelection,
   onMessage: (msg: any) => void,
-  config?: { workspaceRoot?: string; model?: string; mode?: "stdio" | "tcp"; forceDirect?: boolean }
+  config?: {
+    workspaceRoot?: string;
+    model?: string;
+    mode?: "stdio" | "tcp";
+    forceDirect?: boolean;
+    purpose?: string;
+    initiator?: {
+      type: "user" | "system";
+      userId?: string;
+      sessionId?: string;
+      username?: string;
+    };
+    sessionInfo?: {
+      sessionId: string;
+      reopenCount: number;
+      firstOpened: Date;
+      lastOpened: Date;
+    };
+  }
 ): Promise<AiBridge> {
   const preferProxy =
     !config?.workspaceRoot &&
@@ -244,6 +288,9 @@ export async function createAiBridge(
     workspaceRoot: config?.workspaceRoot || chain.worker?.metadata?.workspace,
     model: config?.model ?? chain.ai.metadata?.model,
     mode: config?.mode ?? chain.ai.metadata?.mode,
+    purpose: config?.purpose,
+    initiator: config?.initiator,
+    sessionInfo: config?.sessionInfo,
   });
   await bridge.start();
   return bridge;
