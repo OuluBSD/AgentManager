@@ -52,6 +52,7 @@ import { useMetaChatWebSocket } from "../../hooks/useMetaChatWebSocket";
 import { TopMenuBar, type AppSection } from "../../components/TopMenuBar";
 import { AIChat } from "../../components/AIChat";
 import { Network } from "../../components/Network";
+import { Debug } from "../../components/Debug";
 import { useAIChatBackend } from "../../hooks/useAIChatBackend";
 
 type Status =
@@ -4776,6 +4777,8 @@ export default function Page() {
         <AIChat sessionToken={sessionToken || undefined} />
       ) : currentSection === "network" ? (
         <Network sessionToken={sessionToken || undefined} />
+      ) : currentSection === "debug" ? (
+        <Debug sessionToken={sessionToken || undefined} />
       ) : (
         <main className="page">
           <FileDialog isOpen={isFileDialogOpen} onClose={() => setIsFileDialogOpen(false)} />

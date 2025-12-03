@@ -5,7 +5,7 @@
 
 import { type MouseEvent } from "react";
 
-export type AppSection = "agent-manager" | "ai-chat" | "network";
+export type AppSection = "agent-manager" | "ai-chat" | "network" | "debug";
 type AccountMenuHandler = (event: MouseEvent<HTMLButtonElement>) => void;
 
 interface TopMenuBarProps {
@@ -52,6 +52,12 @@ export function TopMenuBar({
           onClick={() => onSectionChange("network")}
         >
           Network
+        </button>
+        <button
+          className={`menu-bar-item ${currentSection === "debug" ? "active" : ""}`}
+          onClick={() => onSectionChange("debug")}
+        >
+          Debug
         </button>
       </div>
 

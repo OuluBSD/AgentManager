@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveWorkspacePath } from "../utils/workspace";
+import { processLogger } from "./processLogger";
 
 type ManagedSession = {
   id: string;
@@ -37,13 +38,27 @@ export async function createTerminalSession(projectId?: string, cwd?: string) {
 
   const shell = process.env.SHELL || "bash";
   const proc = spawn(shell, { cwd: workingDir, stdio: "pipe" });
+  const sessionId = randomUUID();
   const session: ManagedSession = {
-    id: randomUUID(),
+    id: sessionId,
     projectId,
     cwd: workingDir,
     proc,
     createdAt: new Date(),
   };
+
+  // Track process for debugging
+  const processId = `terminal-${sessionId}`;
+  processLogger.trackChildProcess(
+    processId,
+    "terminal",
+    `Terminal Session ${sessionId.substring(0, 8)}`,
+    shell,
+    [],
+    workingDir,
+    proc,
+    { projectId, sessionId }
+  );
 
   proc.on("exit", () => {
     sessions.delete(session.id);
@@ -59,6 +74,11 @@ export function getTerminalSession(sessionId: string) {
 export function sendInput(sessionId: string, data: string) {
   const session = sessions.get(sessionId);
   if (!session) return false;
+
+  // Log stdin for debugging
+  const processId = `terminal-${sessionId}`;
+  processLogger.logStdin(processId, data);
+
   session.proc.stdin.write(data);
   return true;
 }

@@ -37,6 +37,7 @@ interface ManagedSession {
   config: SessionConfig;
   messageHandlers: Map<string, (msg: any) => void>; // connectionId -> handler
   qwenClient: any; // Reference to the underlying QwenClient for adding handlers
+  cleanupTimeout?: NodeJS.Timeout; // Timeout for delayed cleanup
 }
 
 /**
@@ -65,6 +66,15 @@ class SessionManagerService {
         log.info(`[SessionManager] Waiting for session ${sessionId} to finish initializing...`);
         await (existing as any).promise;
         existing = this.sessions.get(sessionId)!;
+      }
+
+      // Cancel cleanup timeout if session is being reused
+      if (existing.cleanupTimeout) {
+        clearTimeout(existing.cleanupTimeout);
+        existing.cleanupTimeout = undefined;
+        log.info(
+          `[SessionManager] Cancelled cleanup timeout for session ${sessionId} (session is being reused)`
+        );
       }
 
       // Reuse existing session - add new message handler
@@ -148,7 +158,7 @@ class SessionManagerService {
   /**
    * Release a session reference
    * Removes the specific connection's message handler
-   * Only cleans up when refCount reaches 0
+   * Schedules cleanup after a timeout when refCount reaches 0
    */
   async releaseSession(
     sessionId: string,
@@ -177,12 +187,28 @@ class SessionManagerService {
     );
 
     if (session.refCount <= 0) {
+      // Schedule cleanup after 5 minutes to allow for reconnection
+      const CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+
       log.info(
-        `[SessionManager] Cleaning up session ${sessionId} (refCount reached 0, handlers: ${session.messageHandlers.size})`
+        `[SessionManager] Scheduling cleanup for session ${sessionId} in ${CLEANUP_DELAY_MS / 1000}s (refCount reached 0)`
       );
-      await session.bridge.shutdown();
-      this.sessions.delete(sessionId);
-      log.info(`[SessionManager] Session ${sessionId} cleaned up and removed`);
+
+      session.cleanupTimeout = setTimeout(async () => {
+        const currentSession = this.sessions.get(sessionId);
+        if (currentSession && currentSession.refCount <= 0) {
+          log.info(
+            `[SessionManager] Cleanup timeout reached for session ${sessionId}, cleaning up...`
+          );
+          await currentSession.bridge.shutdown();
+          this.sessions.delete(sessionId);
+          log.info(`[SessionManager] Session ${sessionId} cleaned up and removed`);
+        } else {
+          log.info(
+            `[SessionManager] Cleanup timeout reached for session ${sessionId}, but session was reused (refCount: ${currentSession?.refCount})`
+          );
+        }
+      }, CLEANUP_DELAY_MS);
     }
   }
 
@@ -217,6 +243,12 @@ class SessionManagerService {
       return;
     }
 
+    // Cancel cleanup timeout if it exists
+    if (session.cleanupTimeout) {
+      clearTimeout(session.cleanupTimeout);
+      session.cleanupTimeout = undefined;
+    }
+
     log.info(
       `[SessionManager] Force cleaning up session ${sessionId} (refCount: ${session.refCount})`
     );
@@ -232,6 +264,11 @@ class SessionManagerService {
     log.info(`[SessionManager] Cleaning up all ${this.sessions.size} sessions`);
     for (const [sessionId, session] of this.sessions.entries()) {
       try {
+        // Cancel cleanup timeout if it exists
+        if (session.cleanupTimeout) {
+          clearTimeout(session.cleanupTimeout);
+          session.cleanupTimeout = undefined;
+        }
         await session.bridge.shutdown();
         log.info(`[SessionManager] Session ${sessionId} cleaned up`);
       } catch (err) {

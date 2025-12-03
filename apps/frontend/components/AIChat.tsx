@@ -39,14 +39,48 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
     return fallback;
   };
 
-  const [sessions, setSessions] = useState<ChatSession[]>([
-    {
-      id: "default",
-      name: "New Chat",
-      backend: "qwen",
-    },
-  ]);
-  const [activeSessionId, setActiveSessionId] = useState("default");
+  const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    // Try to load from localStorage first
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ai-chat-sessions");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        } catch (err) {
+          console.error("Failed to load saved sessions:", err);
+        }
+      }
+    }
+    // Default: create initial session with timestamp ID
+    return [
+      {
+        id: Date.now().toString(),
+        name: "Chat 1",
+        backend: "qwen",
+      },
+    ];
+  });
+  const [activeSessionId, setActiveSessionId] = useState(() => {
+    // Set to the first session ID from loaded sessions
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ai-chat-sessions");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id) {
+            return parsed[0].id;
+          }
+        } catch (err) {
+          // Fall through to default
+        }
+      }
+    }
+    // Default to first session (will be generated timestamp)
+    return Date.now().toString();
+  });
   const [selectedBackend, setSelectedBackend] = useState<AIBackendType>("qwen");
   const [inputValue, setInputValue] = useState("");
   const [allowChallenge, setAllowChallenge] = useState(() =>
@@ -105,6 +139,13 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
     }
   }, [inputValue]);
 
+  // Persist sessions to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ai-chat-sessions", JSON.stringify(sessions));
+    }
+  }, [sessions]);
+
   const handleSend = useCallback(() => {
     if (!inputValue.trim() || !sessionToken) return;
 
@@ -143,14 +184,14 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
         const filtered = prev.filter((s) => s.id !== sessionId);
         if (filtered.length === 0) {
           // Always keep at least one session
-          return [
-            {
-              id: Date.now().toString(),
-              name: "New Chat",
-              messages: [],
-              backend: selectedBackend,
-            },
-          ];
+          const newSession = {
+            id: Date.now().toString(),
+            name: "Chat 1",
+            backend: selectedBackend,
+          };
+          // Update activeSessionId to match the new session
+          setActiveSessionId(newSession.id);
+          return [newSession];
         }
         return filtered;
       });

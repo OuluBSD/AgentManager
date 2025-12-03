@@ -56,6 +56,7 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
       parseBooleanFlag(process.env.ASSISTANT_CHALLENGE_ENABLED, true)
     );
     let suppressChallengeReply = allowChallenge;
+    let suppressingStream = false; // Track if we're currently suppressing a stream
     let challengeTimeout: NodeJS.Timeout | null = null;
     let bridge: any = null;
     const connectionId = `ws-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -109,17 +110,35 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
           }
 
           if (
-            suppressChallengeReply &&
             msg.type === "conversation" &&
             msg.role === "assistant" &&
             typeof msg.content === "string"
           ) {
-            suppressChallengeReply = false;
-            if (challengeTimeout) {
-              clearTimeout(challengeTimeout);
-              challengeTimeout = null;
+            // Start suppressing if this is the first message and we should suppress the challenge reply
+            if (suppressChallengeReply && !suppressingStream) {
+              suppressingStream = true;
+              if (challengeTimeout) {
+                clearTimeout(challengeTimeout);
+                challengeTimeout = null;
+              }
+              fastify.log.info(
+                `[AIChat] Starting to suppress challenge reply stream for session ${sessionId}`
+              );
             }
-            return;
+
+            // If we're suppressing, check if the stream is complete
+            if (suppressingStream) {
+              // Stream is complete when isStreaming is explicitly false
+              if (msg.isStreaming === false) {
+                suppressingStream = false;
+                suppressChallengeReply = false;
+                fastify.log.info(
+                  `[AIChat] Finished suppressing challenge reply stream for session ${sessionId}`
+                );
+              }
+              // Suppress this chunk
+              return;
+            }
           }
 
           connection.socket.send(JSON.stringify(msg));
