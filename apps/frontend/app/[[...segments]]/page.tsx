@@ -226,22 +226,9 @@ const contextActionConfig: Record<ContextTarget, { key: string; label: string }[
 };
 
 function dedupeMessages(items: MessageItem[]): MessageItem[] {
-  const result: MessageItem[] = [];
-  for (const item of items) {
-    const last = result[result.length - 1];
-    const currentContent = (item.content || "").trim();
-    const lastContent = (last?.content || "").trim();
-    if (
-      last &&
-      last.role === item.role &&
-      last.chatId === item.chatId &&
-      lastContent === currentContent
-    ) {
-      continue;
-    }
-    result.push(item);
-  }
-  return result;
+  // Deduplication disabled - return all messages as-is
+  console.log("[dedupeMessages] Skipping deduplication, returning all messages:", items.length);
+  return items;
 }
 
 function messageKey(message: MessageItem): string {
@@ -251,41 +238,59 @@ function messageKey(message: MessageItem): string {
 }
 
 function mergeMessages(existing: MessageItem[], incoming: MessageItem[]): MessageItem[] {
+  // DEDUPLICATION DISABLED - Merge by message ID only
   const isTempId = (id?: string | null) =>
     typeof id === "string" && /^(assistant|tool|user)-\d+/.test(id);
-  const deduped: Record<string, MessageItem> = {};
-  const combined = [...existing, ...incoming].map((message) => ({
-    ...message,
-    createdAt: message.createdAt || new Date().toISOString(),
-  }));
-  combined.sort((a, b) => {
-    const aTime = Date.parse(a.createdAt);
-    const bTime = Date.parse(b.createdAt);
-    return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
-  });
-  for (const message of combined) {
-    const key = messageKey(message);
-    const current = deduped[key];
-    if (!current) {
-      deduped[key] = message;
-      continue;
-    }
-    const currentTemp = isTempId(current.id);
-    const nextTemp = isTempId(message.id);
-    if (currentTemp && !nextTemp) {
-      deduped[key] = message;
-      continue;
-    }
-    if (!currentTemp && nextTemp) {
-      continue;
-    }
-    const currentTime = Date.parse(current.createdAt);
-    const nextTime = Date.parse(message.createdAt);
-    deduped[key] = (Number.isFinite(nextTime) ? nextTime : 0) >= (Number.isFinite(currentTime) ? currentTime : 0)
-      ? message
-      : current;
+
+  const idMap: Record<string, MessageItem> = {};
+
+  // Add existing messages to map by ID
+  for (const message of existing) {
+    const normalized = {
+      ...message,
+      createdAt: message.createdAt || new Date().toISOString(),
+    };
+    idMap[normalized.id] = normalized;
   }
-  return Object.values(deduped).sort((a, b) => {
+
+  // Add/update with incoming messages (prefer non-temp IDs)
+  for (const message of incoming) {
+    const normalized = {
+      ...message,
+      createdAt: message.createdAt || new Date().toISOString(),
+    };
+    const existing = idMap[normalized.id];
+
+    if (!existing) {
+      // New message, add it
+      idMap[normalized.id] = normalized;
+    } else {
+      // Message exists, prefer non-temp ID
+      const existingIsTemp = isTempId(existing.id);
+      const incomingIsTemp = isTempId(normalized.id);
+
+      if (existingIsTemp && !incomingIsTemp) {
+        // Replace temp with permanent
+        idMap[normalized.id] = normalized;
+      } else if (!existingIsTemp && incomingIsTemp) {
+        // Keep permanent
+        continue;
+      } else {
+        // Both temp or both permanent, keep newer
+        const existingTime = Date.parse(existing.createdAt);
+        const incomingTime = Date.parse(normalized.createdAt);
+        if (
+          (Number.isFinite(incomingTime) ? incomingTime : 0) >=
+          (Number.isFinite(existingTime) ? existingTime : 0)
+        ) {
+          idMap[normalized.id] = normalized;
+        }
+      }
+    }
+  }
+
+  // Sort by timestamp
+  return Object.values(idMap).sort((a, b) => {
     const aTime = Date.parse(a.createdAt);
     const bTime = Date.parse(b.createdAt);
     return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
@@ -905,28 +910,25 @@ export default function Page() {
   const chatHydrationRunIdRef = useRef(0);
   const aiSessionResumeRef = useRef<Record<string, { hydratedAt: number }>>({});
   const persistedToolMessagesRef = useRef<Set<string>>(new Set());
-  const updateChatSessionStep = useCallback(
-    (key: string, patch: Partial<ChatSessionStep>) => {
-      setChatSessionSteps((prev) => {
-        const existingIndex = prev.findIndex((item) => item.key === key);
-        if (existingIndex >= 0) {
-          const next = [...prev];
-          next[existingIndex] = { ...next[existingIndex], ...patch };
-          return next;
-        }
-        return [
-          ...prev,
-          {
-            key,
-            label: patch.label ?? key,
-            status: patch.status ?? "pending",
-            detail: patch.detail,
-          },
-        ];
-      });
-    },
-    []
-  );
+  const updateChatSessionStep = useCallback((key: string, patch: Partial<ChatSessionStep>) => {
+    setChatSessionSteps((prev) => {
+      const existingIndex = prev.findIndex((item) => item.key === key);
+      if (existingIndex >= 0) {
+        const next = [...prev];
+        next[existingIndex] = { ...next[existingIndex], ...patch };
+        return next;
+      }
+      return [
+        ...prev,
+        {
+          key,
+          label: patch.label ?? key,
+          status: patch.status ?? "pending",
+          detail: patch.detail,
+        },
+      ];
+    });
+  }, []);
   const [chatStatusDraft, setChatStatusDraft] = useState<Status>("in_progress");
   const [chatProgressDraft, setChatProgressDraft] = useState<string>("0");
   const [chatFocusDraft, setChatFocusDraft] = useState("");
@@ -976,7 +978,7 @@ export default function Page() {
     [resolvedGlobalThemeMode, selectedProject?.theme]
   );
   const selectedChat = chats.find((c) => c.id === selectedChatId);
-  const chatSessionNonce = selectedChatId ? chatSessionNonces[selectedChatId] ?? 0 : 0;
+  const chatSessionNonce = selectedChatId ? (chatSessionNonces[selectedChatId] ?? 0) : 0;
   const isMetaChatSelected = selectedChat?.meta;
   const templateForChat = selectedChat?.templateId
     ? templates.find((t) => t.id === selectedChat.templateId)
@@ -1073,7 +1075,8 @@ export default function Page() {
     },
     onCompletionStats: (stats) => {
       if (!selectedChatId || selectedChatId.startsWith("meta-")) return;
-      const limit = stats.contextLimit && stats.contextLimit > 0 ? stats.contextLimit : DEFAULT_CONTEXT_LIMIT;
+      const limit =
+        stats.contextLimit && stats.contextLimit > 0 ? stats.contextLimit : DEFAULT_CONTEXT_LIMIT;
       const total =
         stats.totalTokens ??
         (stats.promptTokens !== undefined || stats.completionTokens !== undefined
@@ -1127,18 +1130,45 @@ export default function Page() {
         shouldPersist = true;
         return dedupeMessages([...prev, next]);
       });
+      console.log("[onToolMessage] Persistence check:", {
+        shouldPersist,
+        hasSessionToken: !!sessionToken,
+        alreadyPersisted,
+        persistKey,
+        baseId,
+        displayRole,
+        messageId,
+      });
+
       if (shouldPersist && sessionToken && !alreadyPersisted) {
+        console.log("[onToolMessage] Persisting tool message:", {
+          chatId: selectedChatId,
+          role: "tool",
+          content: resolvedContent,
+          metadata: displayRole ? { displayRole } : undefined,
+        });
+
         postChatMessage(sessionToken, selectedChatId, {
           role: "tool",
           content: resolvedContent,
           metadata: displayRole ? { displayRole } : undefined,
         })
-          .then(() => {
+          .then((result) => {
+            console.log("[onToolMessage] Successfully persisted tool message:", result);
             persistedToolMessagesRef.current.add(persistKey);
           })
           .catch((err) => {
+            console.error("[onToolMessage] Failed to persist tool message:", err);
             setMessagesError(err instanceof Error ? err.message : "Failed to persist tool message");
           });
+      } else {
+        console.log("[onToolMessage] Skipping persistence:", {
+          reason: !shouldPersist
+            ? "message already exists"
+            : !sessionToken
+              ? "no session token"
+              : "already persisted",
+        });
       }
     },
   });
@@ -1211,7 +1241,12 @@ export default function Page() {
       repoHint === autoDemoWorkspace.repo);
 
   useEffect(() => {
-    if (!sessionToken || !selectedChatId || selectedChatId.startsWith("meta-") || selectedChat?.meta) {
+    if (
+      !sessionToken ||
+      !selectedChatId ||
+      selectedChatId.startsWith("meta-") ||
+      selectedChat?.meta
+    ) {
       setAiStreamingPreview("");
       disconnectChatAi();
       return;
@@ -1271,8 +1306,16 @@ export default function Page() {
           const metaChat = Object.values(metaChats).find((mc) => mc.roadmapListId === metaChatId);
           if (metaChat) {
             const items = await fetchMetaChatMessages(token, metaChat.id);
-      const mapped = items.map((m) => ({ ...m, chatId: m.metaChatId })) as MessageItem[];
-      const merged = mergeMessages(messageCacheRef.current[chatId] ?? [], mapped);
+            const mapped = items.map((m) => ({
+              ...m,
+              chatId: m.metaChatId,
+              displayRole:
+                m.displayRole ??
+                (typeof (m as any)?.metadata?.displayRole === "string"
+                  ? ((m as any).metadata!.displayRole as string)
+                  : undefined),
+            })) as MessageItem[];
+            const merged = mergeMessages(messageCacheRef.current[chatId] ?? [], mapped);
             setMessages(merged);
             setMessagesForChatId(chatId);
             setMessageCache((prev) => {
@@ -1288,6 +1331,9 @@ export default function Page() {
         } else {
           // Load regular chat messages
           const items = await fetchChatMessages(token, chatId);
+          console.log(`[loadMessagesForChat] Fetched ${items.length} messages for chat ${chatId}`);
+          console.log("[loadMessagesForChat] Raw messages from API:", items);
+
           const mapped = (items as MessageItem[]).map((m) => ({
             ...m,
             displayRole:
@@ -1296,6 +1342,9 @@ export default function Page() {
                 ? ((m as any).metadata!.displayRole as string)
                 : undefined),
           }));
+
+          console.log("[loadMessagesForChat] Mapped messages with displayRole:", mapped);
+
           const merged = mergeMessages(messageCacheRef.current[chatId] ?? [], mapped);
           setMessages(merged);
           setMessagesForChatId(chatId);
@@ -2322,10 +2371,10 @@ export default function Page() {
       setChatSessionSteps([
         { key: "open", label: "Opening chat", status: "pending" },
         { key: "connect", label: "Connecting to AI server", status: "pending" },
-         { key: "session", label: "Checking for previous session", status: "pending" },
-         { key: "history", label: "Loading chat history", status: "pending" },
-         { key: "push", label: "Pushing history to AI", status: "pending" },
-       ]);
+        { key: "session", label: "Checking for previous session", status: "pending" },
+        { key: "history", label: "Loading chat history", status: "pending" },
+        { key: "push", label: "Pushing history to AI", status: "pending" },
+      ]);
       if (selectedRoadmapId) {
         persistChatSelection(selectedRoadmapId, chat.id);
       }
@@ -3365,13 +3414,7 @@ export default function Page() {
     } finally {
       setResettingChatSession(false);
     }
-  }, [
-    disconnectChatAi,
-    loadMessagesForChat,
-    selectedChatId,
-    sessionToken,
-    setChatSessionNonces,
-  ]);
+  }, [disconnectChatAi, loadMessagesForChat, selectedChatId, sessionToken, setChatSessionNonces]);
 
   const handleUpdateChatStatus = useCallback(
     async (override?: { status?: Status; progressPercent?: number; focus?: string }) => {
@@ -3898,10 +3941,20 @@ export default function Page() {
   const roadmapSummary = selectedRoadmapId ? roadmapStatus[selectedRoadmapId] : null;
   const siblingTasks = chats.filter((chat) => !chat.meta && chat.id && chat.id !== selectedChatId);
   const lastStatusMessage = [...messages].reverse().find((msg) => msg.role === "status");
+
+  console.log("[visibleMessages] Current filter:", messageFilter);
+  console.log("[visibleMessages] Total messages:", messages.length);
+  console.log(
+    "[visibleMessages] Message roles:",
+    messages.map((m) => ({ id: m.id, role: m.role, displayRole: m.displayRole }))
+  );
+
   const visibleMessages =
     messageFilter === "all"
       ? messages
       : messages.filter((message) => message.role === messageFilter);
+
+  console.log("[visibleMessages] Visible after filter:", visibleMessages.length);
   const selectedChatTokens = selectedChatId ? chatTokenUsage[selectedChatId] : null;
   const contextLimitForChat =
     selectedChatTokens?.contextLimit && selectedChatTokens.contextLimit > 0
@@ -4208,7 +4261,10 @@ export default function Page() {
                 <div className="item-subtle" style={{ marginBottom: 8 }}>
                   The chat will open after the AI server connects and history is synced.
                 </div>
-                <div className="chat-loader-steps" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div
+                  className="chat-loader-steps"
+                  style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                >
                   {chatSessionSteps.map((step) => (
                     <div
                       key={step.key}
@@ -4337,352 +4393,359 @@ export default function Page() {
                         .join(" · ")
                     : "No sibling tasks."}
                 </div>
-            <div className="login-row" style={{ gap: 8, flexWrap: "wrap" }}>
-              <select
-                className="filter"
-                value={chatStatusDraft}
-                onChange={(e) => setChatStatusDraft(e.target.value as Status)}
-                style={{ minWidth: 140 }}
-              >
-                {["in_progress", "active", "waiting", "blocked", "done", "idle"].map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="filter"
-                style={{ width: 90 }}
-                value={chatProgressDraft}
-                onChange={(e) => setChatProgressDraft(e.target.value)}
-                placeholder="%"
-              />
-              <input
-                className="filter"
-                style={{ flex: 1, minWidth: 200 }}
-                value={chatFocusDraft}
-                onChange={(e) => setChatFocusDraft(e.target.value)}
-                placeholder="Focus / summary"
-              />
-              <button
-                className="tab"
-                onClick={() => handleUpdateChatStatus()}
-                disabled={messagesLoading}
-              >
-                Update status
-              </button>
-              <button
-                className="ghost"
-                onClick={handleRequestStatusMessage}
-                disabled={messagesLoading}
-              >
-                Request status
-              </button>
-              {chatUpdateMessage && (
-                <span className="item-subtle" style={{ color: "#94a3b8" }}>
-                  {chatUpdateMessage}
-                </span>
-              )}
-            </div>
-            {messagesError && (
-              <div className="item-subtle" style={{ color: "#ef4444" }}>
-                {messagesError}
-              </div>
-            )}
-            <div className="login-row" style={{ gap: 8, alignItems: "center", marginBottom: 6 }}>
-              <span className="item-subtle">Messages:</span>
-              <select
-                className="filter"
-                value={messageFilter}
-                onChange={(e) => setMessageFilter(e.target.value as typeof messageFilter)}
-                style={{ minWidth: 160 }}
-              >
-                {["all", "user", "assistant", "system", "status", "meta", "tool"].map((value) => (
-                  <option key={value} value={value}>
-                    {value === "all" ? "all roles" : value}
-                  </option>
-                ))}
-              </select>
-              <span className="item-subtle">
-                Showing {visibleMessages.length}/{messages.length} messages
-              </span>
-            </div>
-            <div className="chat-stream" ref={chatStreamRef}>
-              {messagesLoading && <div className="item-subtle">Loading messages…</div>}
-              {!messagesLoading && messages.length === 0 && (
-                <div className="item-subtle">No messages yet.</div>
-              )}
-              {!messagesLoading && messages.length > 0 && visibleMessages.length === 0 && (
-                <div className="item-subtle">No messages match this filter.</div>
-              )}
-              {isAutoDemoChat && (
-                <div className="chat-row">
-                  <span className="chat-role chat-role-system">assistant</span>
-                  <div className="bubble">
-                    <div className="panel-title" style={{ marginBottom: 4 }}>
-                      Auto demo controls (qwen)
-                    </div>
-                    <div className="panel-text" style={{ marginBottom: 6 }}>
-                      Workspace: {autoDemoWorkspace.path} · Repo: {autoDemoWorkspace.repo}
-                    </div>
-                    <div className="demo-attachments" style={{ marginBottom: 8 }}>
-                      <div className="demo-attachment">
-                        <div className="demo-attachment-label">Manager</div>
-                        <div className="demo-attachment-value">{autoDemoWorkspace.manager}</div>
-                      </div>
-                      <div className="demo-attachment">
-                        <div className="demo-attachment-label">Server</div>
-                        <div className="demo-attachment-value">{autoDemoWorkspace.server}</div>
-                      </div>
-                      <div className="demo-attachment">
-                        <div className="demo-attachment-label">AI Chat</div>
-                        <div className="demo-attachment-value">{autoDemoWorkspace.aiChat}</div>
-                      </div>
-                    </div>
-                    <div className="demo-ai-controls" style={{ marginBottom: 6 }}>
-                      <button
-                        className="tab"
-                        onClick={() => {
-                          setAutoDemoAiEnabled(true);
-                          setAutoDemoKickoffSent(false);
-                          setAutoDemoLog("Starting AI demo…");
-                        }}
-                        disabled={!sessionToken}
-                      >
-                        Run AI demo (qwen)
-                      </button>
-                      <button
-                        className="ghost"
-                        onClick={() => {
-                          setAutoDemoAiEnabled(false);
-                          setAutoDemoKickoffSent(false);
-                          setAutoDemoLog("Idle.");
-                          disconnectAutoDemo();
-                        }}
-                        disabled={!autoDemoAiEnabled && !isAutoDemoConnected}
-                      >
-                        Stop
-                      </button>
-                      <span className="item-subtle">{autoDemoLog}</span>
-                    </div>
-                    <div className="demo-ai-stream" style={{ marginTop: 6 }}>
-                      <div className="demo-ai-stream-title">AI output</div>
-                      {autoDemoMessages.slice(-4).map((msg) => (
-                        <div key={msg.id} className={`demo-ai-line demo-ai-${msg.role}`}>
-                          <span className="demo-ai-role">{msg.role}:</span> {msg.content}
+                <div className="login-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <select
+                    className="filter"
+                    value={chatStatusDraft}
+                    onChange={(e) => setChatStatusDraft(e.target.value as Status)}
+                    style={{ minWidth: 140 }}
+                  >
+                    {["in_progress", "active", "waiting", "blocked", "done", "idle"].map(
+                      (status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      )
+                    )}
+                  </select>
+                  <input
+                    className="filter"
+                    style={{ width: 90 }}
+                    value={chatProgressDraft}
+                    onChange={(e) => setChatProgressDraft(e.target.value)}
+                    placeholder="%"
+                  />
+                  <input
+                    className="filter"
+                    style={{ flex: 1, minWidth: 200 }}
+                    value={chatFocusDraft}
+                    onChange={(e) => setChatFocusDraft(e.target.value)}
+                    placeholder="Focus / summary"
+                  />
+                  <button
+                    className="tab"
+                    onClick={() => handleUpdateChatStatus()}
+                    disabled={messagesLoading}
+                  >
+                    Update status
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={handleRequestStatusMessage}
+                    disabled={messagesLoading}
+                  >
+                    Request status
+                  </button>
+                  {chatUpdateMessage && (
+                    <span className="item-subtle" style={{ color: "#94a3b8" }}>
+                      {chatUpdateMessage}
+                    </span>
+                  )}
+                </div>
+                {messagesError && (
+                  <div className="item-subtle" style={{ color: "#ef4444" }}>
+                    {messagesError}
+                  </div>
+                )}
+                <div
+                  className="login-row"
+                  style={{ gap: 8, alignItems: "center", marginBottom: 6 }}
+                >
+                  <span className="item-subtle">Messages:</span>
+                  <select
+                    className="filter"
+                    value={messageFilter}
+                    onChange={(e) => setMessageFilter(e.target.value as typeof messageFilter)}
+                    style={{ minWidth: 160 }}
+                  >
+                    {["all", "user", "assistant", "system", "status", "meta", "tool"].map(
+                      (value) => (
+                        <option key={value} value={value}>
+                          {value === "all" ? "all roles" : value}
+                        </option>
+                      )
+                    )}
+                  </select>
+                  <span className="item-subtle">
+                    Showing {visibleMessages.length}/{messages.length} messages
+                  </span>
+                </div>
+                <div className="chat-stream" ref={chatStreamRef}>
+                  {messagesLoading && <div className="item-subtle">Loading messages…</div>}
+                  {!messagesLoading && messages.length === 0 && (
+                    <div className="item-subtle">No messages yet.</div>
+                  )}
+                  {!messagesLoading && messages.length > 0 && visibleMessages.length === 0 && (
+                    <div className="item-subtle">No messages match this filter.</div>
+                  )}
+                  {isAutoDemoChat && (
+                    <div className="chat-row">
+                      <span className="chat-role chat-role-system">assistant</span>
+                      <div className="bubble">
+                        <div className="panel-title" style={{ marginBottom: 4 }}>
+                          Auto demo controls (qwen)
                         </div>
-                      ))}
-                      {autoDemoStreaming && (
-                        <div className="demo-ai-line demo-ai-assistant">
-                          <span className="demo-ai-role">assistant:</span> {autoDemoStreaming}
+                        <div className="panel-text" style={{ marginBottom: 6 }}>
+                          Workspace: {autoDemoWorkspace.path} · Repo: {autoDemoWorkspace.repo}
                         </div>
-                      )}
-                      {!autoDemoMessages.length && !autoDemoStreaming && (
-                        <div className="item-subtle">No output yet.</div>
-                      )}
-                    </div>
-                    <div className="panel-text" style={{ marginTop: 8 }}>
-                      Pre-seeded steps for this demo:
-                    </div>
-                    <div className="demo-steps">
-                      {qwenCliPreview.map((step) => (
-                        <div key={step.id} className="demo-step">
-                          <div className="demo-step-headline">✦ {step.headline}</div>
-                          {step.items.map((item, index) => (
-                            <div
-                              key={`${step.id}-${index}`}
-                              className={`demo-step-item demo-step-${item.kind}`}
-                            >
-                              {item.title && (
-                                <div className="demo-step-title">
-                                  {item.kind === "command"
-                                    ? "✓ "
-                                    : item.kind === "diff"
-                                      ? "↦ "
-                                      : ""}
-                                  {item.title}
+                        <div className="demo-attachments" style={{ marginBottom: 8 }}>
+                          <div className="demo-attachment">
+                            <div className="demo-attachment-label">Manager</div>
+                            <div className="demo-attachment-value">{autoDemoWorkspace.manager}</div>
+                          </div>
+                          <div className="demo-attachment">
+                            <div className="demo-attachment-label">Server</div>
+                            <div className="demo-attachment-value">{autoDemoWorkspace.server}</div>
+                          </div>
+                          <div className="demo-attachment">
+                            <div className="demo-attachment-label">AI Chat</div>
+                            <div className="demo-attachment-value">{autoDemoWorkspace.aiChat}</div>
+                          </div>
+                        </div>
+                        <div className="demo-ai-controls" style={{ marginBottom: 6 }}>
+                          <button
+                            className="tab"
+                            onClick={() => {
+                              setAutoDemoAiEnabled(true);
+                              setAutoDemoKickoffSent(false);
+                              setAutoDemoLog("Starting AI demo…");
+                            }}
+                            disabled={!sessionToken}
+                          >
+                            Run AI demo (qwen)
+                          </button>
+                          <button
+                            className="ghost"
+                            onClick={() => {
+                              setAutoDemoAiEnabled(false);
+                              setAutoDemoKickoffSent(false);
+                              setAutoDemoLog("Idle.");
+                              disconnectAutoDemo();
+                            }}
+                            disabled={!autoDemoAiEnabled && !isAutoDemoConnected}
+                          >
+                            Stop
+                          </button>
+                          <span className="item-subtle">{autoDemoLog}</span>
+                        </div>
+                        <div className="demo-ai-stream" style={{ marginTop: 6 }}>
+                          <div className="demo-ai-stream-title">AI output</div>
+                          {autoDemoMessages.slice(-4).map((msg) => (
+                            <div key={msg.id} className={`demo-ai-line demo-ai-${msg.role}`}>
+                              <span className="demo-ai-role">{msg.role}:</span> {msg.content}
+                            </div>
+                          ))}
+                          {autoDemoStreaming && (
+                            <div className="demo-ai-line demo-ai-assistant">
+                              <span className="demo-ai-role">assistant:</span> {autoDemoStreaming}
+                            </div>
+                          )}
+                          {!autoDemoMessages.length && !autoDemoStreaming && (
+                            <div className="item-subtle">No output yet.</div>
+                          )}
+                        </div>
+                        <div className="panel-text" style={{ marginTop: 8 }}>
+                          Pre-seeded steps for this demo:
+                        </div>
+                        <div className="demo-steps">
+                          {qwenCliPreview.map((step) => (
+                            <div key={step.id} className="demo-step">
+                              <div className="demo-step-headline">✦ {step.headline}</div>
+                              {step.items.map((item, index) => (
+                                <div
+                                  key={`${step.id}-${index}`}
+                                  className={`demo-step-item demo-step-${item.kind}`}
+                                >
+                                  {item.title && (
+                                    <div className="demo-step-title">
+                                      {item.kind === "command"
+                                        ? "✓ "
+                                        : item.kind === "diff"
+                                          ? "↦ "
+                                          : ""}
+                                      {item.title}
+                                    </div>
+                                  )}
+                                  {renderDemoStepContent(item)}
                                 </div>
-                              )}
-                              {renderDemoStepContent(item)}
+                              ))}
                             </div>
                           ))}
                         </div>
-                      ))}
+                      </div>
+                      <span className="item-subtle">auto</span>
                     </div>
-                  </div>
-                  <span className="item-subtle">auto</span>
-                </div>
-              )}
-              {visibleMessages.map((message) => {
-                const isTool = message.role === "tool";
-                const [toolStatus, ...toolRest] = isTool ? message.content.split("\n") : [];
-                const toolDetail = toolRest.join("\n");
-                return (
-                  <div
-                    className="chat-row"
-                    key={message.id}
-                    ref={(el) => messageNav.registerRef(message.id, el)}
-                  >
-                    <span className={`chat-role chat-role-${message.role}`}>
-                      {message.displayRole ?? message.role}
-                    </span>
-                    <div className="bubble">
-                      {isTool ? (
-                        <>
-                          <span className="tool-status">{toolStatus || "Running"}</span>
-                          {toolDetail && (
+                  )}
+                  {visibleMessages.map((message) => {
+                    const isTool = message.role === "tool";
+                    const [toolStatus, ...toolRest] = isTool ? message.content.split("\n") : [];
+                    const toolDetail = toolRest.join("\n");
+                    return (
+                      <div
+                        className="chat-row"
+                        key={message.id}
+                        ref={(el) => messageNav.registerRef(message.id, el)}
+                      >
+                        <span className={`chat-role chat-role-${message.role}`}>
+                          {message.displayRole ?? message.role}
+                        </span>
+                        <div className="bubble">
+                          {isTool ? (
                             <>
-                              <br />
-                              {toolDetail}
+                              <span className="tool-status">{toolStatus || "Running"}</span>
+                              {toolDetail && (
+                                <>
+                                  <br />
+                                  {toolDetail}
+                                </>
+                              )}
                             </>
+                          ) : (
+                            message.content
                           )}
-                        </>
-                      ) : (
-                        message.content
-                      )}
+                        </div>
+                        <span className="item-subtle">
+                          {new Date(message.createdAt).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {aiStreamingPreview && !isMetaChatSelected && (
+                    <div className="chat-row" key="assistant-streaming">
+                      <span className="chat-role chat-role-assistant">assistant</span>
+                      <div className="bubble" style={{ opacity: 0.85 }}>
+                        {aiStreamingPreview}
+                        <span className="item-subtle" style={{ marginLeft: 8 }}>
+                          streaming…
+                        </span>
+                      </div>
+                      <span className="item-subtle">just now</span>
                     </div>
-                    <span className="item-subtle">
-                      {new Date(message.createdAt).toLocaleTimeString()}
+                  )}
+                </div>
+                {messageNav.userMessages.length > 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.5rem",
+                      padding: "0.5rem 0.75rem",
+                      borderTop: "1px solid #374151",
+                      background: "#1F2937",
+                    }}
+                  >
+                    <span className="item-subtle" style={{ fontSize: "0.875rem" }}>
+                      User messages: {messageNav.currentUserMessageIndex + 1} /{" "}
+                      {messageNav.userMessages.length}
                     </span>
-                  </div>
-                );
-              })}
-              {aiStreamingPreview && !isMetaChatSelected && (
-                <div className="chat-row" key="assistant-streaming">
-                  <span className="chat-role chat-role-assistant">assistant</span>
-                  <div className="bubble" style={{ opacity: 0.85 }}>
-                    {aiStreamingPreview}
-                      <span className="item-subtle" style={{ marginLeft: 8 }}>
-                        streaming…
-                      </span>
-                    </div>
-                    <span className="item-subtle">just now</span>
+                    <button
+                      type="button"
+                      onClick={messageNav.goToPrevious}
+                      style={{
+                        padding: "0.25rem 0.75rem",
+                        fontSize: "0.875rem",
+                        background: "#374151",
+                        color: "#F9FAFB",
+                        border: "1px solid #4B5563",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                      }}
+                      title="Previous user message (wraps around)"
+                    >
+                      ← Prev
+                    </button>
+                    <button
+                      type="button"
+                      onClick={messageNav.goToNext}
+                      style={{
+                        padding: "0.25rem 0.75rem",
+                        fontSize: "0.875rem",
+                        background: "#374151",
+                        color: "#F9FAFB",
+                        border: "1px solid #4B5563",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                      }}
+                      title="Next user message (wraps around)"
+                    >
+                      Next →
+                    </button>
                   </div>
                 )}
-            </div>
-            {messageNav.userMessages.length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  padding: "0.5rem 0.75rem",
-                  borderTop: "1px solid #374151",
-                  background: "#1F2937",
-                }}
-              >
-                <span className="item-subtle" style={{ fontSize: "0.875rem" }}>
-                  User messages: {messageNav.currentUserMessageIndex + 1} /{" "}
-                  {messageNav.userMessages.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={messageNav.goToPrevious}
-                  style={{
-                    padding: "0.25rem 0.75rem",
-                    fontSize: "0.875rem",
-                    background: "#374151",
-                    color: "#F9FAFB",
-                    border: "1px solid #4B5563",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                  }}
-                  title="Previous user message (wraps around)"
-                >
-                  ← Prev
-                </button>
-                <button
-                  type="button"
-                  onClick={messageNav.goToNext}
-                  style={{
-                    padding: "0.25rem 0.75rem",
-                    fontSize: "0.875rem",
-                    background: "#374151",
-                    color: "#F9FAFB",
-                    border: "1px solid #4B5563",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                  }}
-                  title="Next user message (wraps around)"
-                >
-                  Next →
-                </button>
-              </div>
-            )}
-            {slashSuggestions.length > 0 && (
-              <SlashCommandAutocomplete
-                suggestions={slashSuggestions}
-                selectedIndex={slashSelectedIndex}
-                onSelect={handleSlashCommandSelect}
-                inputRef={messageInputRef}
-              />
-            )}
-            <div className="login-row" style={{ alignItems: "flex-start", gap: 8 }}>
-              <textarea
-                ref={messageInputRef}
-                className="code-input"
-                style={{ minHeight: 120, flex: 1 }}
-                placeholder="Send a message to this chat (type / for commands)"
-                value={messageDraft}
-                onChange={(e) => setMessageDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  // Handle slash command autocomplete navigation
-                  if (slashSuggestions.length > 0) {
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      setSlashSelectedIndex((prev) => (prev + 1) % slashSuggestions.length);
-                      return;
-                    }
-                    if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      setSlashSelectedIndex(
-                        (prev) => (prev - 1 + slashSuggestions.length) % slashSuggestions.length
-                      );
-                      return;
-                    }
-                    if (e.key === "Tab") {
-                      e.preventDefault();
-                      handleSlashCommandSelect(slashSuggestions[slashSelectedIndex]);
-                      return;
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setSlashSuggestions([]);
-                      return;
-                    }
-                  }
+                {slashSuggestions.length > 0 && (
+                  <SlashCommandAutocomplete
+                    suggestions={slashSuggestions}
+                    selectedIndex={slashSelectedIndex}
+                    onSelect={handleSlashCommandSelect}
+                    inputRef={messageInputRef}
+                  />
+                )}
+                <div className="login-row" style={{ alignItems: "flex-start", gap: 8 }}>
+                  <textarea
+                    ref={messageInputRef}
+                    className="code-input"
+                    style={{ minHeight: 120, flex: 1 }}
+                    placeholder="Send a message to this chat (type / for commands)"
+                    value={messageDraft}
+                    onChange={(e) => setMessageDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Handle slash command autocomplete navigation
+                      if (slashSuggestions.length > 0) {
+                        if (e.key === "ArrowDown") {
+                          e.preventDefault();
+                          setSlashSelectedIndex((prev) => (prev + 1) % slashSuggestions.length);
+                          return;
+                        }
+                        if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          setSlashSelectedIndex(
+                            (prev) => (prev - 1 + slashSuggestions.length) % slashSuggestions.length
+                          );
+                          return;
+                        }
+                        if (e.key === "Tab") {
+                          e.preventDefault();
+                          handleSlashCommandSelect(slashSuggestions[slashSelectedIndex]);
+                          return;
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setSlashSuggestions([]);
+                          return;
+                        }
+                      }
 
-                  // Regular message sending
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSendMessage();
-                  }
-                }}
-                disabled={!sessionToken || sendingMessage}
-              />
-              <button
-                className="ghost"
-                style={{ alignSelf: "stretch", minHeight: 44 }}
-                onClick={() => setIsFileDialogOpen(true)}
-                disabled={!sessionToken}
-              >
-                Attach
-              </button>
-              <button
-                className="tab"
-                style={{ alignSelf: "stretch", minHeight: 44 }}
-                onClick={handleSendMessage}
-                disabled={
-                  sendingMessage || !messageDraft.trim() || !sessionToken || !selectedChatId
-                }
-              >
-                {sendingMessage ? "Sending…" : "Send"}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    );
+                      // Regular message sending
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendMessage();
+                      }
+                    }}
+                    disabled={!sessionToken || sendingMessage}
+                  />
+                  <button
+                    className="ghost"
+                    style={{ alignSelf: "stretch", minHeight: 44 }}
+                    onClick={() => setIsFileDialogOpen(true)}
+                    disabled={!sessionToken}
+                  >
+                    Attach
+                  </button>
+                  <button
+                    className="tab"
+                    style={{ alignSelf: "stretch", minHeight: 44 }}
+                    onClick={handleSendMessage}
+                    disabled={
+                      sendingMessage || !messageDraft.trim() || !sessionToken || !selectedChatId
+                    }
+                  >
+                    {sendingMessage ? "Sending…" : "Send"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        );
     }
   })();
 

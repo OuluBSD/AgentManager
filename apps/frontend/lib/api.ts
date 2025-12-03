@@ -258,7 +258,17 @@ export async function createChat(
 export async function fetchChatMessages(
   token: string,
   chatId: string
-): Promise<{ id: string; chatId: string; role: string; content: string; createdAt: string }[]> {
+): Promise<
+  {
+    id: string;
+    chatId: string;
+    role: string;
+    content: string;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+    displayRole?: string;
+  }[]
+> {
   return fetchWithAuth(token, `/api/chats/${chatId}/messages`);
 }
 
@@ -304,7 +314,17 @@ export async function postChatMessage(
 export async function fetchMetaChatMessages(
   token: string,
   metaChatId: string
-): Promise<{ id: string; metaChatId: string; role: string; content: string; createdAt: string }[]> {
+): Promise<
+  {
+    id: string;
+    metaChatId: string;
+    role: string;
+    content: string;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+    displayRole?: string;
+  }[]
+> {
   return fetchWithAuth(token, `/api/meta-chats/${metaChatId}/messages`);
 }
 
