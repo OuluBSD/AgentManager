@@ -59,6 +59,11 @@ interface ProcessLogEntry {
   attachments?: {
     webSocketId?: string;
     transport?: string;
+    host?: {
+      pid?: number;
+      name?: string;
+      processId?: string;
+    };
     chainInfo?: {
       managerId?: string;
       workerId?: string;
@@ -308,6 +313,16 @@ export function Debug({ sessionToken }: DebugProps) {
   const filteredProcesses = processes
     .filter((p) => (grouping === "all" ? true : p.type === grouping))
     .filter((p) => (hideStopped ? p.status !== "exited" && p.status !== "error" : true));
+
+  // Tail preview (last 100 chars of stdout/stderr for selected process)
+  const ioTail = useMemo(() => {
+    if (!ioLogs.length) return "";
+    const joined = ioLogs
+      .filter((log) => log.direction === "stdout" || log.direction === "stderr")
+      .map((log) => log.content)
+      .join("");
+    return joined.slice(-100);
+  }, [ioLogs]);
 
   const formatTimestamp = (ts: string) => {
     const date = new Date(ts);
@@ -700,6 +715,12 @@ export function Debug({ sessionToken }: DebugProps) {
 
                   <div className="debug-io-logs">
                     <h3>I/O Logs ({ioLogs.length} entries)</h3>
+                    {ioTail && (
+                      <div className="debug-info-row" style={{ marginBottom: 8 }}>
+                        <label>Tail (last 100 chars):</label>
+                        <code style={{ whiteSpace: "pre-wrap" }}>{ioTail}</code>
+                      </div>
+                    )}
                     <div className="debug-io-list">
                       {ioLogs.map((log, idx) => (
                         <div key={idx} className="debug-io-entry">

@@ -36,8 +36,31 @@ export async function createTerminalSession(projectId?: string, cwd?: string) {
   const workingDir = await resolveWorkingDirectory(projectId, cwd);
   if (!workingDir) return null;
 
-  const shell = process.env.SHELL || "bash";
-  const proc = spawn(shell, { cwd: workingDir, stdio: "pipe" });
+  // Resolve shell path robustly: prefer $SHELL, otherwise try common locations
+  const shellCandidates = [
+    process.env.SHELL,
+    "/bin/bash",
+    "/usr/bin/bash",
+    "/usr/local/bin/bash",
+    "/usr/bin/env bash",
+    "bash",
+  ].filter(Boolean) as string[];
+
+  let shell = shellCandidates[0]!;
+  for (const candidate of shellCandidates) {
+    try {
+      await fs.access(candidate.split(" ")[0]); // check executable part
+      shell = candidate;
+      break;
+    } catch {
+      // continue
+    }
+  }
+
+  const proc =
+    shell.includes(" ")
+      ? spawn(shell.split(" ")[0], shell.split(" ").slice(1), { cwd: workingDir, stdio: "pipe" })
+      : spawn(shell, { cwd: workingDir, stdio: "pipe" });
   const sessionId = randomUUID();
   const session: ManagedSession = {
     id: sessionId,
@@ -49,6 +72,8 @@ export async function createTerminalSession(projectId?: string, cwd?: string) {
 
   // Track process for debugging
   const processId = `terminal-${sessionId}`;
+  const hostProgramName =
+    process.title && process.title !== "node" ? process.title : process.argv[1] || "node";
   processLogger.trackChildProcess(
     processId,
     "terminal",
@@ -57,7 +82,18 @@ export async function createTerminalSession(projectId?: string, cwd?: string) {
     [],
     workingDir,
     proc,
-    { projectId, sessionId }
+    {
+      projectId,
+      sessionId,
+      attachments: {
+        transport: "stdio",
+        host: {
+          pid: process.pid,
+          name: hostProgramName,
+          processId,
+        },
+      },
+    }
   );
 
   proc.on("exit", () => {

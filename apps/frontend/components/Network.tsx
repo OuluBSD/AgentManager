@@ -42,6 +42,11 @@ type NetworkConnection = {
   status: "starting" | "running" | "exited" | "error";
   attachments?: {
     transport?: string;
+    host?: {
+      pid?: number;
+      name?: string;
+      processId?: string;
+    };
     chainInfo?: {
       managerId?: string;
       workerId?: string;
@@ -209,11 +214,11 @@ export function Network({ sessionToken }: NetworkProps) {
         .filter(
           (connection) =>
             connection.status !== "exited" &&
-            (connection.type === "qwen" || connection.attachments?.transport === "stdio")
+            (connection.type === "qwen" ||
+              connection.type === "terminal" ||
+              connection.attachments?.transport === "stdio")
         )
-        .sort(
-          (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
-        ),
+        .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()),
     [connections]
   );
 
@@ -698,6 +703,35 @@ export function Network({ sessionToken }: NetworkProps) {
                 <label>Transport:</label>
                 <span>{selectedConnection.attachments?.transport || "stdio"}</span>
               </div>
+              {selectedConnection.attachments?.host && (
+                <div className="info-row">
+                  <label>Host program:</label>
+                  <span className="network-host-link">
+                    {selectedConnection.attachments.host.name || "Unknown"}{" "}
+                    {selectedConnection.attachments.host.pid
+                      ? `(pid ${selectedConnection.attachments.host.pid})`
+                      : ""}
+                    {selectedConnection.attachments.host.processId &&
+                      connections.some(
+                        (c) => c.id === selectedConnection.attachments?.host?.processId
+                      ) && (
+                        <button
+                          className="btn-link"
+                          onClick={() => {
+                            const hostId = selectedConnection.attachments?.host?.processId;
+                            if (!hostId) return;
+                            const hostConn = connections.find((c) => c.id === hostId);
+                            if (hostConn) {
+                              setSelectedItem({ kind: "connection", connection: hostConn });
+                            }
+                          }}
+                        >
+                          View
+                        </button>
+                      )}
+                  </span>
+                </div>
+              )}
               <div className="info-row">
                 <label>PID:</label>
                 <span>{selectedConnection.pid ?? "n/a"}</span>

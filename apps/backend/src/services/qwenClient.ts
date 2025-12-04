@@ -302,7 +302,17 @@ export class QwenClient {
       metadata: { model: this.config.model, mode: "stdio" },
       purpose: this.config.purpose,
       initiator: this.config.initiator,
-      attachments: this.config.attachments,
+      attachments: {
+        ...this.config.attachments,
+        host: {
+          pid: process.pid,
+          name:
+            process.title && process.title !== "node"
+              ? process.title
+              : process.argv[1] || "node",
+          processId: this.processId,
+        },
+      },
       sessionInfo: this.config.sessionInfo,
     });
 

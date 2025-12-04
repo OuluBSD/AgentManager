@@ -33,6 +33,11 @@ export interface ProcessLogEntry {
   attachments?: {
     webSocketId?: string;
     transport?: string;
+    host?: {
+      pid?: number;
+      name?: string;
+      processId?: string;
+    };
     chainInfo?: {
       managerId?: string;
       workerId?: string;
