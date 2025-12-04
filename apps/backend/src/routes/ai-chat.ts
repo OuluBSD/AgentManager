@@ -135,6 +135,14 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
                 fastify.log.info(
                   `[AIChat] Finished suppressing challenge reply stream for session ${sessionId}`
                 );
+                // Send status back to idle after system initialization completes
+                connection.socket.send(
+                  JSON.stringify({
+                    type: "status",
+                    state: "idle",
+                    message: "Ready",
+                  })
+                );
               }
               // Suppress this chunk
               return;
@@ -181,6 +189,16 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         fastify.log.info(
           `[AIChat] Sending CHALLENGE_PROMPT for new session ${sessionId} (isNew=${isNewSession})`
         );
+
+        // Send custom status message for system initialization
+        connection.socket.send(
+          JSON.stringify({
+            type: "status",
+            state: "responding",
+            message: "Initializing assistant...",
+          })
+        );
+
         bridge.send({
           type: "user_input",
           content: CHALLENGE_PROMPT,
