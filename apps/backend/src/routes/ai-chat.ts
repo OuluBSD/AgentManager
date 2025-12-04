@@ -155,6 +155,7 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         }
       );
       bridge = result.bridge;
+      const isNewSession = result.isNew;
 
       connection.socket.send(
         JSON.stringify({
@@ -175,7 +176,11 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         })
       );
 
-      if (allowChallenge) {
+      // Only send CHALLENGE_PROMPT for NEW sessions to avoid showing system instruction response when reconnecting
+      if (allowChallenge && isNewSession) {
+        fastify.log.info(
+          `[AIChat] Sending CHALLENGE_PROMPT for new session ${sessionId} (isNew=${isNewSession})`
+        );
         bridge.send({
           type: "user_input",
           content: CHALLENGE_PROMPT,
@@ -184,6 +189,12 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
           suppressChallengeReply = false;
           challengeTimeout = null;
         }, 5000);
+      } else if (allowChallenge && !isNewSession) {
+        fastify.log.info(
+          `[AIChat] Skipping CHALLENGE_PROMPT for existing session ${sessionId} (isNew=${isNewSession})`
+        );
+        // Don't need to suppress reply for reused sessions since we're not sending the prompt
+        suppressChallengeReply = false;
       }
 
       connection.socket.on("message", (data: Buffer) => {
