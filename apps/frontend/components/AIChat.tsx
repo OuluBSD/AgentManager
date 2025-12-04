@@ -97,6 +97,7 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
     messages,
     status,
     statusMessage,
+    statusContext,
     isStreaming,
     streamingContent,
     connect,
@@ -221,6 +222,79 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
+  const statusText = (() => {
+    if (statusContext === "system") {
+      return statusMessage || "Processing system message";
+    }
+    let base = "";
+    if (status === "idle") base = "Ready";
+    if (status === "connecting") base = "Connecting...";
+    if (status === "responding") base = "Responding...";
+    if (status === "error") base = "Error";
+
+    if (statusMessage) {
+      const shouldCombine = base && statusMessage.trim() !== base;
+      return shouldCombine ? `${base} - ${statusMessage}` : statusMessage;
+    }
+    return base;
+  })();
+
+  const renderMessageContent = (content: string, isStreamingBlock = false) => {
+    const fenceCount = (content.match(/```/g) || []).length;
+    const needsClosingFence = isStreamingBlock && fenceCount % 2 === 1;
+    const toRender = needsClosingFence ? `${content}\n\`\`\`` : content;
+
+    const textWithBreaks = (text: string) => {
+      const lines = text.split("\n");
+      return lines.map((line, idx) => (
+        <span key={idx}>
+          {line}
+          {idx < lines.length - 1 ? <br /> : null}
+        </span>
+      ));
+    };
+
+    const segments: JSX.Element[] = [];
+    const regex = /```([\w+-]*)\s*([\s\S]*?)```/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let key = 0;
+
+    while ((match = regex.exec(toRender)) !== null) {
+      const textPart = toRender.slice(lastIndex, match.index);
+      if (textPart) {
+        segments.push(
+          <div key={`text-${key}`} className="ai-chat-message-text">
+            {textWithBreaks(textPart)}
+          </div>
+        );
+        key += 1;
+      }
+
+      const language = match[1]?.trim();
+      const code = match[2] ?? "";
+      segments.push(
+        <pre key={`code-${key}`} className="ai-chat-code-block">
+          {language ? <div className="ai-chat-code-lang">{language}</div> : null}
+          <code className={language ? `language-${language}` : undefined}>{code}</code>
+        </pre>
+      );
+      key += 1;
+      lastIndex = regex.lastIndex;
+    }
+
+    const trailing = toRender.slice(lastIndex);
+    if (trailing || segments.length === 0) {
+      segments.push(
+        <div key={`text-${key}`} className="ai-chat-message-text">
+          {textWithBreaks(trailing)}
+        </div>
+      );
+    }
+
+    return segments;
+  };
+
   return (
     <div className="ai-chat-container">
       {/* Header with sessions and controls */}
@@ -299,7 +373,7 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
                   </span>
                   <span className="ai-chat-message-time">{formatTime(msg.timestamp)}</span>
                 </div>
-                <div className="ai-chat-message-content">{msg.content}</div>
+                <div className="ai-chat-message-content">{renderMessageContent(msg.content)}</div>
               </div>
             ))
           )}
@@ -310,7 +384,7 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
                 <span className="ai-chat-message-time">now</span>
               </div>
               <div className="ai-chat-message-content ai-chat-message-streaming">
-                {streamingContent}
+                {renderMessageContent(streamingContent, true)}
               </div>
             </div>
           )}
@@ -321,13 +395,7 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
         <div className="ai-chat-input-area">
           <div className="ai-chat-status-bar">
             <div className={`ai-chat-status-dot ${status}`} />
-            <span>
-              {status === "idle" && "Ready"}
-              {status === "connecting" && "Connecting..."}
-              {status === "responding" && "Responding..."}
-              {status === "error" && "Error"}
-              {statusMessage && ` - ${statusMessage}`}
-            </span>
+            <span>{statusText}</span>
           </div>
 
           <div className="ai-chat-input-container">

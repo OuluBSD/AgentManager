@@ -15,6 +15,7 @@ export interface ChatStatus {
   state: "idle" | "connecting" | "responding" | "waiting_for_confirmation" | "error";
   message?: string;
   thought?: string;
+  context?: string;
 }
 
 export interface ChatInfo {

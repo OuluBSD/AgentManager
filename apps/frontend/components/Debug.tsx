@@ -5,7 +5,35 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+
+const DEBUG_SETTINGS_STORAGE_KEY = "debugSettings";
+
+const DEFAULT_DEBUG_SETTINGS = {
+  autoRefresh: true,
+  showContent: true,
+  hideStopped: true,
+};
+
+const loadDebugSettings = () => {
+  if (typeof window === "undefined") return DEFAULT_DEBUG_SETTINGS;
+  try {
+    const raw = window.localStorage.getItem(DEBUG_SETTINGS_STORAGE_KEY);
+    if (!raw) return DEFAULT_DEBUG_SETTINGS;
+    const parsed = JSON.parse(raw);
+    return {
+      autoRefresh:
+        typeof parsed.autoRefresh === "boolean" ? parsed.autoRefresh : DEFAULT_DEBUG_SETTINGS.autoRefresh,
+      showContent:
+        typeof parsed.showContent === "boolean" ? parsed.showContent : DEFAULT_DEBUG_SETTINGS.showContent,
+      hideStopped:
+        typeof parsed.hideStopped === "boolean" ? parsed.hideStopped : DEFAULT_DEBUG_SETTINGS.hideStopped,
+    };
+  } catch (error) {
+    console.error("Failed to load debug settings from storage:", error);
+    return DEFAULT_DEBUG_SETTINGS;
+  }
+};
 
 interface ProcessLogEntry {
   id: string;
@@ -81,6 +109,9 @@ interface ToolUsageEntry {
   toolName: string;
   status: string;
   args: Record<string, any>;
+  pendingAt?: string;
+  runningAt?: string;
+  completedAt?: string;
   confirmationDetails?: {
     message: string;
     requires_approval: boolean;
@@ -97,6 +128,7 @@ type ViewMode = "processes" | "websockets";
 type ProcessGrouping = "all" | "qwen" | "terminal" | "git" | "other";
 
 export function Debug({ sessionToken }: DebugProps) {
+  const initialSettings = useMemo(loadDebugSettings, []);
   const [processes, setProcesses] = useState<ProcessLogEntry[]>([]);
   const [selectedProcess, setSelectedProcess] = useState<string | null>(null);
   const [ioLogs, setIOLogs] = useState<ProcessIOEntry[]>([]);
@@ -107,9 +139,15 @@ export function Debug({ sessionToken }: DebugProps) {
   const [grouping, setGrouping] = useState<ProcessGrouping>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [showContent, setShowContent] = useState(true);
-  const [hideStopped, setHideStopped] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(initialSettings.autoRefresh);
+  const [showContent, setShowContent] = useState(initialSettings.showContent);
+  const [hideStopped, setHideStopped] = useState(initialSettings.hideStopped);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const payload = JSON.stringify({ autoRefresh, showContent, hideStopped });
+    window.localStorage.setItem(DEBUG_SETTINGS_STORAGE_KEY, payload);
+  }, [autoRefresh, showContent, hideStopped]);
 
   // Fetch processes
   const fetchProcesses = async () => {
@@ -319,6 +357,80 @@ export function Debug({ sessionToken }: DebugProps) {
     } catch {
       return <pre className="debug-io-content">{json}</pre>;
     }
+  };
+
+  const syntaxHighlightData = (data: unknown): JSX.Element => {
+    try {
+      const payload = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+      return syntaxHighlightJSON(payload);
+    } catch {
+      return <pre className="debug-io-content">{String(data)}</pre>;
+    }
+  };
+
+  const parseDate = (value?: string) => {
+    if (!value) return undefined;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? undefined : date;
+  };
+
+  const formatDurationMs = (ms: number | undefined) => {
+    if (ms === undefined || ms < 0) return "—";
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+  };
+
+  const latestToolUsage = useMemo(() => {
+    const byId: Record<string, ToolUsageEntry> = {};
+
+    for (const tool of toolUsage) {
+      const key = `${tool.toolGroupId ?? "default"}:${tool.toolId}`;
+      const timestamp = new Date(tool.timestamp).getTime();
+      const existingTs = byId[key] ? new Date(byId[key].timestamp).getTime() : -Infinity;
+
+      if (!byId[key] || timestamp >= existingTs) {
+        byId[key] = tool;
+      }
+    }
+
+    return Object.values(byId).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }, [toolUsage]);
+
+  const getToolStatusLabel = (tool: ToolUsageEntry) => {
+    const status = tool.status?.toLowerCase() || "pending";
+    switch (status) {
+      case "pending":
+      case "waiting_for_confirmation":
+        return tool.confirmationDetails?.requires_approval ? "Awaiting approval" : "Pending";
+      case "running":
+      case "in_progress":
+        return "Running";
+      case "success":
+      case "ready":
+      case "completed":
+      case "complete":
+      case "done":
+        return "Completed";
+      case "error":
+      case "failed":
+      case "failure":
+        return "Failed";
+      default:
+        return tool.status || "Unknown";
+    }
+  };
+
+  const getToolStatusColor = (tool: ToolUsageEntry) => {
+    const label = getToolStatusLabel(tool).toLowerCase();
+    if (label.startsWith("awaiting")) return "#f59e0b";
+    if (label === "pending") return "#f59e0b";
+    if (label === "running") return "#3b82f6";
+    if (label === "completed") return "#10b981";
+    if (label === "failed") return "#ef4444";
+    return "#6b7280";
   };
 
   if (loading) {
@@ -658,52 +770,82 @@ export function Debug({ sessionToken }: DebugProps) {
                   {/* Tool Usage Section (for Qwen processes) */}
                   {process.type === "qwen" && (
                     <div className="debug-tool-logs">
-                      <h3>Tool Usage ({toolUsage.length} tools)</h3>
+                      <h3>Tool Usage ({latestToolUsage.length} tools)</h3>
                       <div className="debug-tool-list">
-                        {toolUsage.map((tool, idx) => (
-                          <div key={idx} className="debug-tool-entry">
-                            <div className="debug-tool-header">
-                              <span className="debug-tool-name">{tool.toolName}</span>
-                              <span
-                                className="debug-tool-status"
-                                style={{
-                                  color:
-                                    tool.status === "success"
-                                      ? "#10b981"
-                                      : tool.status === "pending"
-                                        ? "#f59e0b"
-                                        : "#ef4444",
-                                }}
-                              >
-                                {tool.status}
-                              </span>
-                              <span className="debug-tool-timestamp">
-                                {formatTimestamp(tool.timestamp)}
-                              </span>
-                            </div>
-                            {showContent && (
-                              <>
-                                <div className="debug-tool-args">
-                                  <strong>Arguments:</strong>
-                                  <pre>{JSON.stringify(tool.args, null, 2)}</pre>
+                        {latestToolUsage.map((tool, idx) => {
+                          const pendingAt = parseDate(tool.pendingAt || tool.timestamp);
+                          const runningAt = parseDate(tool.runningAt);
+                          const completedAt = parseDate(tool.completedAt);
+                          const waitingMs =
+                            pendingAt && runningAt ? runningAt.getTime() - pendingAt.getTime() : undefined;
+                          const processingMs =
+                            runningAt && completedAt ? completedAt.getTime() - runningAt.getTime() : undefined;
+                          const totalMs =
+                            pendingAt && completedAt ? completedAt.getTime() - pendingAt.getTime() : undefined;
+
+                          return (
+                            <div key={idx} className="debug-tool-entry">
+                              <div className="debug-tool-header">
+                                <span className="debug-tool-name">{tool.toolName}</span>
+                                <span
+                                  className="debug-tool-status"
+                                  style={{
+                                    color: getToolStatusColor(tool),
+                                  }}
+                                >
+                                  {getToolStatusLabel(tool)}
+                                </span>
+                                <span className="debug-tool-timestamp">
+                                  {formatTimestamp(tool.timestamp)}
+                                </span>
+                              </div>
+                              <div className="debug-tool-timings">
+                                <div>
+                                  <strong>Pending:</strong>{" "}
+                                  {pendingAt ? formatTimestamp(pendingAt.toISOString()) : "—"}
                                 </div>
-                                {tool.confirmationDetails && (
-                                  <div className="debug-tool-confirmation">
-                                    <strong>Confirmation:</strong>{" "}
-                                    {tool.confirmationDetails.message}
-                                    {tool.confirmationDetails.requires_approval && (
-                                      <span>
-                                        {" "}
-                                        (Requires approval:{" "}
-                                        {tool.approved ? "✓ Approved" : "✗ Not approved"})
-                                      </span>
-                                    )}
+                                <div>
+                                  <strong>Running:</strong>{" "}
+                                  {runningAt ? formatTimestamp(runningAt.toISOString()) : "—"}
+                                </div>
+                                <div>
+                                  <strong>Completed:</strong>{" "}
+                                  {completedAt ? formatTimestamp(completedAt.toISOString()) : "—"}
+                                </div>
+                                <div>
+                                  <strong>Waiting:</strong> {formatDurationMs(waitingMs)}
+                                  {" · "}
+                                  <strong>Processing:</strong> {formatDurationMs(processingMs)}
+                                  {" · "}
+                                  <strong>Total:</strong> {formatDurationMs(totalMs)}
+                                </div>
+                              </div>
+                              {showContent && (
+                                <>
+                                  <div className="debug-tool-args">
+                                    <strong>Arguments:</strong>
+                                    {syntaxHighlightData(tool.args)}
                                   </div>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        ))}
+                                  {tool.confirmationDetails && (
+                                    <div className="debug-tool-confirmation">
+                                      <strong>Confirmation:</strong>{" "}
+                                      {tool.confirmationDetails.message}{" "}
+                                      {tool.confirmationDetails.requires_approval ? (
+                                        <span>
+                                          {tool.approved === false
+                                            ? "(Awaiting approval)"
+                                            : "(Approved)"}
+                                        </span>
+                                      ) : (
+                                        <span>(No approval required)</span>
+                                      )}
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
                         {toolUsage.length === 0 && (
                           <div className="debug-empty-state">
                             <p>No tool usage yet</p>

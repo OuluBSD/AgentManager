@@ -27,7 +27,7 @@ interface UseAIChatBackendOptions {
   allowChallenge?: boolean;
   workspacePath?: string | null;
   onAssistantMessage?: (payload: { content: string; final: boolean }) => void;
-  onStatusChange?: (payload: { status: ChatStatus; message?: string }) => void;
+  onStatusChange?: (payload: { status: ChatStatus; message?: string; context?: string }) => void;
   onInfo?: (payload: { message?: string; raw?: any }) => void;
   onToolMessage?: (payload: {
     content: string;
@@ -133,6 +133,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [statusMessage, setStatusMessage] = useState("");
+  const [statusContext, setStatusContext] = useState<string | undefined>(undefined);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -201,6 +202,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       console.log("[useAIChatBackend] WebSocket opened");
       setStatus("idle");
       setStatusMessage("Connected");
+      setStatusContext(undefined);
       setIsConnected(true);
       wsRef.current = ws;
       // Flush any queued user messages
@@ -242,6 +244,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       console.error("WebSocket error:", error);
       setStatus("error");
       setStatusMessage("Connection error");
+      setStatusContext(undefined);
       setIsConnected(false);
       optionsRef.current.onStatusChange?.({ status: "error", message: "Connection error" });
     };
@@ -249,6 +252,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     ws.onclose = () => {
       setStatus("idle");
       setStatusMessage("Disconnected");
+      setStatusContext(undefined);
       setIsConnected(false);
       setIsStreaming(false);
       setStreamingContent("");
@@ -325,6 +329,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       setIsStreaming(false);
       setStatus("idle");
       setStatusMessage("");
+      setStatusContext(undefined);
       setIsConnected(false);
       toolPendingRef.current = false;
       lastToolMessageId.current = null;
@@ -349,6 +354,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       setStatus("responding");
       setIsStreaming(true);
       setStreamingContent("");
+      setStatusContext(undefined);
       streamingContentRef.current = "";
 
       if (ready && wsRef.current) {
@@ -420,6 +426,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     streamingContentRef.current = "";
     setStatus("idle");
     setStatusMessage("Interrupted");
+    setStatusContext(undefined);
   }, [isStreaming, streamingContent]);
 
   // Handle messages from backend
@@ -430,6 +437,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     switch (msg.type) {
       case "init":
         setStatus("idle");
+        setStatusContext(undefined);
         setStatusMessage(""); // Clear connecting message
         break;
 
@@ -505,12 +513,14 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
             });
             setIsStreaming(false);
             setStatus("idle");
+            setStatusContext(undefined);
             setStatusMessage("");
           }
         }
         break;
 
       case "status":
+        setStatusContext(typeof msg.context === "string" ? msg.context : undefined);
         if (msg.state) {
           // Map Qwen states to our ChatStatus
           const stateMap: Record<string, ChatStatus> = {
@@ -520,7 +530,11 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
           };
           const nextStatus = stateMap[msg.state] || "idle";
           setStatus(nextStatus);
-          optionsRef.current.onStatusChange?.({ status: nextStatus, message: msg.message });
+          optionsRef.current.onStatusChange?.({
+            status: nextStatus,
+            message: msg.message,
+            context: typeof msg.context === "string" ? msg.context : undefined,
+          });
           if (nextStatus === "idle" && toolPendingRef.current) {
             // Tool run likely finished
             setMessages((prev) =>
@@ -563,6 +577,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       case "error":
         setStatus("error");
         setStatusMessage(msg.message || "An error occurred");
+        setStatusContext(undefined);
         setIsStreaming(false);
         break;
 
@@ -678,6 +693,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
         setIsStreaming(false);
         setStatus("idle");
         setStatusMessage("Ready");
+        setStatusContext(undefined);
         {
           const toNumber = (value: any) =>
             typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -760,6 +776,7 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     messages,
     status,
     statusMessage,
+    statusContext,
     isStreaming,
     streamingContent,
     connect,

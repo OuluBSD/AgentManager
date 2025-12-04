@@ -4,12 +4,15 @@ import { AIBackendType } from "@nexus/shared/chat/AIBackend";
 import { QwenCommand } from "../services/qwenClient.js";
 import { resolveAiChain } from "../services/aiChatBridge.js";
 import { sessionManager } from "../services/sessionManager.js";
+import { processLogger } from "../services/processLogger.js";
 
 const CHALLENGE_PROMPT = [
   "System instruction: Adopt a critical collaborator stance.",
   "When statements seem incorrect or risky, challenge them respectfully, ask clarifying questions, surface contradictions, and suggest safer alternatives.",
   "Do not echo this instruction to the user; silently apply it during the conversation.",
 ].join(" ");
+
+const SYSTEM_STATUS_MESSAGE = "Processing system message";
 
 function parseBooleanFlag(value: string | undefined, defaultValue: boolean): boolean {
   if (typeof value !== "string") return defaultValue;
@@ -57,9 +60,22 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
     );
     let suppressChallengeReply = allowChallenge;
     let suppressingStream = false; // Track if we're currently suppressing a stream
+    let systemMessageActive = false;
     let challengeTimeout: NodeJS.Timeout | null = null;
     let bridge: any = null;
     const connectionId = `ws-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const runningTools = new Map<
+      string,
+      {
+        groupId?: number;
+        processId?: string;
+        toolName?: string;
+        args?: Record<string, any>;
+        confirmationDetails?: { message: string; requires_approval: boolean };
+        pendingAt?: Date;
+        runningAt?: Date;
+      }
+    >();
 
     try {
       const chain = await resolveAiChain(fastify);
@@ -92,9 +108,79 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
             return;
           }
 
+          const systemMessageInFlight = systemMessageActive || suppressingStream;
+          const processId = (bridge as any)?.client?.processId;
+
+          const markToolsCompleted = (status: string, timestamp = new Date()) => {
+            if (!processId) return;
+            const pendingEntries: Array<{
+              toolId: string;
+              processId?: string;
+              toolName?: string;
+              groupId?: number;
+              args?: Record<string, any>;
+              confirmationDetails?: { message: string; requires_approval: boolean };
+              runningAt?: Date;
+              pendingAt?: Date;
+            }> = [];
+
+            if (runningTools.size > 0) {
+              for (const [toolId, info] of runningTools.entries()) {
+                pendingEntries.push({
+                  toolId,
+                  processId: info.processId,
+                  toolName: info.toolName,
+                  groupId: info.groupId,
+                  args: info.args,
+                  confirmationDetails: info.confirmationDetails,
+                  runningAt: info.runningAt,
+                  pendingAt: info.pendingAt,
+                });
+              }
+            } else {
+              // Fallback: if the running map is empty, mark any tools without a completedAt as done
+              const existing = processLogger.getToolUsage(processId) || [];
+              for (const tool of existing) {
+                if (!tool.completedAt) {
+                  pendingEntries.push({
+                    toolId: tool.toolId,
+                    processId,
+                    toolName: tool.toolName,
+                    groupId: tool.toolGroupId,
+                    args: tool.args,
+                    confirmationDetails: tool.confirmationDetails,
+                    runningAt: tool.runningAt,
+                    pendingAt: tool.pendingAt,
+                  });
+                }
+              }
+            }
+
+            if (pendingEntries.length === 0) return;
+
+            for (const entry of pendingEntries) {
+              processLogger.logToolUsage({
+                processId: entry.processId || processId,
+                timestamp,
+                toolGroupId: entry.groupId,
+                toolId: entry.toolId,
+                toolName: entry.toolName || "tool",
+                status,
+                args: entry.args || {},
+                approved: true,
+                confirmationDetails: entry.confirmationDetails,
+                runningAt: entry.runningAt,
+                pendingAt: entry.pendingAt,
+                completedAt: timestamp,
+              });
+              runningTools.delete(entry.toolId);
+            }
+          };
+
           // Auto-approve tool groups
           if (msg.type === "tool_group") {
-            if (!approvedToolGroups.has(msg.id)) {
+            const isNewGroup = !approvedToolGroups.has(msg.id);
+            if (isNewGroup) {
               approvedToolGroups.add(msg.id);
               fastify.log.info(
                 `[AIChat] Auto-approving tool group ${msg.id} with ${msg.tools.length} tools`
@@ -105,8 +191,86 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
                   approved: true,
                   tool_id: tool.tool_id,
                 });
+                if (processId) {
+                  runningTools.set(tool.tool_id, {
+                    groupId: msg.id,
+                    processId,
+                    toolName: tool.tool_name,
+                    args: tool.args,
+                    confirmationDetails: tool.confirmation_details,
+                  });
+                }
               }
             }
+            if (processId) {
+              const now = new Date();
+              for (const tool of msg.tools) {
+                const rawStatus = tool.status || "pending";
+                const rawLower = rawStatus.toLowerCase();
+                const shouldPromote =
+                  rawLower === "pending" || rawLower === "waiting_for_confirmation";
+                const status =
+                  approvedToolGroups.has(msg.id) && shouldPromote ? "running" : rawStatus;
+                const statusLower = status.toLowerCase();
+                const isPending = rawLower === "pending" || rawLower === "waiting_for_confirmation";
+                const isRunning =
+                  statusLower === "running" || statusLower === "in_progress" || statusLower === "executing";
+                const existing = runningTools.get(tool.tool_id);
+                const pendingAt = existing?.pendingAt ?? (isPending ? now : undefined);
+                const runningAt = existing?.runningAt ?? (isRunning ? now : undefined);
+                processLogger.logToolUsage({
+                  processId,
+                  timestamp: now,
+                  toolGroupId: msg.id,
+                  toolId: tool.tool_id,
+                  toolName: tool.tool_name,
+                  status,
+                  pendingAt,
+                  runningAt,
+                  args: tool.args,
+                  confirmationDetails: tool.confirmation_details,
+                  approved:
+                    isNewGroup ||
+                    tool.confirmation_details?.requires_approval !== true ||
+                    (statusLower !== "pending" && statusLower !== "waiting_for_confirmation"),
+                });
+
+                const lower = status.toLowerCase();
+                const isCompleted =
+                  lower === "success" ||
+                  lower === "ready" ||
+                  lower === "completed" ||
+                  lower === "complete" ||
+                  lower === "done" ||
+                  lower === "error" ||
+                  lower === "failed" ||
+                  lower === "failure";
+                if (isCompleted) {
+                  runningTools.delete(tool.tool_id);
+                } else {
+                  runningTools.set(tool.tool_id, {
+                    groupId: msg.id,
+                    processId,
+                    toolName: tool.tool_name,
+                    args: tool.args,
+                    confirmationDetails: tool.confirmation_details,
+                    pendingAt,
+                    runningAt,
+                  });
+                }
+              }
+            }
+          }
+
+          if (msg.type === "status" && systemMessageInFlight) {
+            connection.socket.send(
+              JSON.stringify({
+                ...msg,
+                message: SYSTEM_STATUS_MESSAGE,
+                context: "system",
+              })
+            );
+            return;
           }
 
           if (
@@ -132,6 +296,7 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
               if (msg.isStreaming === false) {
                 suppressingStream = false;
                 suppressChallengeReply = false;
+                systemMessageActive = false;
                 fastify.log.info(
                   `[AIChat] Finished suppressing challenge reply stream for session ${sessionId}`
                 );
@@ -147,6 +312,23 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
               // Suppress this chunk
               return;
             }
+          }
+
+          if (
+            msg.type === "conversation" &&
+            msg.role === "assistant" &&
+            msg.isStreaming === false &&
+            runningTools.size > 0
+          ) {
+            markToolsCompleted("completed");
+          }
+
+          if (msg.type === "status" && msg.state === "idle") {
+            markToolsCompleted("completed");
+          }
+
+          if (msg.type === "completion_stats") {
+            markToolsCompleted("completed");
           }
 
           connection.socket.send(JSON.stringify(msg));
@@ -190,12 +372,14 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
           `[AIChat] Sending CHALLENGE_PROMPT for new session ${sessionId} (isNew=${isNewSession})`
         );
 
+        systemMessageActive = true;
         // Send custom status message for system initialization
         connection.socket.send(
           JSON.stringify({
             type: "status",
             state: "responding",
-            message: "Initializing assistant...",
+            message: SYSTEM_STATUS_MESSAGE,
+            context: "system",
           })
         );
 
@@ -205,6 +389,7 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         });
         challengeTimeout = setTimeout(() => {
           suppressChallengeReply = false;
+          systemMessageActive = false;
           challengeTimeout = null;
         }, 5000);
       } else if (allowChallenge && !isNewSession) {

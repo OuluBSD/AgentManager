@@ -83,6 +83,9 @@ export interface ToolUsageEntry {
   toolName: string;
   status: string;
   args: Record<string, any>;
+  pendingAt?: Date;
+  runningAt?: Date;
+  completedAt?: Date;
   confirmationDetails?: {
     message: string;
     requires_approval: boolean;
@@ -223,14 +226,61 @@ class ProcessLoggerService extends EventEmitter {
     const logs = this.toolLogs.get(entry.processId);
     if (!logs) return;
 
-    logs.push(entry);
+    const status = entry.status || "pending";
+    const requiresApproval = entry.confirmationDetails?.requires_approval;
+    const approved =
+      entry.approved ??
+      (requiresApproval ? status !== "pending" && status !== "waiting_for_confirmation" : true);
+    const timestamp = entry.timestamp || new Date();
+
+    const statusLower = status.toLowerCase();
+    const isPending = statusLower === "pending" || statusLower === "waiting_for_confirmation";
+    const isRunning = statusLower === "running" || statusLower === "in_progress" || statusLower === "executing";
+    const isCompleted =
+      statusLower === "success" ||
+      statusLower === "ready" ||
+      statusLower === "completed" ||
+      statusLower === "complete" ||
+      statusLower === "done" ||
+      statusLower === "error" ||
+      statusLower === "failed" ||
+      statusLower === "failure";
+
+    const normalizedEntry: ToolUsageEntry = {
+      ...entry,
+      status,
+      approved,
+      timestamp,
+      pendingAt: entry.pendingAt ?? (isPending ? timestamp : undefined),
+      runningAt: entry.runningAt ?? (isRunning ? timestamp : undefined),
+      completedAt: entry.completedAt ?? (isCompleted ? timestamp : undefined),
+    };
+
+    // Update existing entry for the same tool/group instead of only appending new rows
+    const existingIndex = logs.findIndex(
+      (log) => log.toolId === normalizedEntry.toolId && log.toolGroupId === normalizedEntry.toolGroupId
+    );
+
+    if (existingIndex >= 0) {
+      const existing = logs[existingIndex];
+      logs[existingIndex] = {
+        ...existing,
+        ...normalizedEntry,
+        approved: existing.approved || normalizedEntry.approved || false,
+        pendingAt: existing.pendingAt ?? normalizedEntry.pendingAt,
+        runningAt: existing.runningAt ?? normalizedEntry.runningAt,
+        completedAt: normalizedEntry.completedAt ?? existing.completedAt,
+      };
+    } else {
+      logs.push(normalizedEntry);
+    }
 
     // Trim if too many entries
     if (logs.length > this.maxToolEntriesPerProcess) {
       logs.shift();
     }
 
-    this.emit("tool:usage", entry);
+    this.emit("tool:usage", normalizedEntry);
   }
 
   /**
