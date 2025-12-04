@@ -7,6 +7,17 @@ export PATH="$HOME/.local/node_modules/.bin:$PATH"
 # Configuration file path
 CONFIG_FILE="$HOME/.config/agent-manager/config.env"
 
+# Default bind host/ports for dev servers (backend listens on HOST:PORT)
+export HOST="${HOST:-0.0.0.0}"
+export PORT="${PORT:-3001}"
+
+# Helper: pick first non-loopback IPv4 address from ifconfig
+choose_bind_address() {
+  if command -v ifconfig >/dev/null 2>&1; then
+    ifconfig | awk '/inet / && $2 !~ /^127\./ {print $2; exit}'
+  fi
+}
+
 # Load config from ~/.config/agent-manager/config.env if it exists (preferred)
 if [ -f "$CONFIG_FILE" ]; then
   echo "Loading configuration from $CONFIG_FILE"
@@ -25,6 +36,22 @@ else
   echo "Warning: No configuration file found."
   echo "Run ./install.sh to create $CONFIG_FILE"
   echo "Or create $ROOT/.env manually"
+fi
+
+# Ensure Next knows the backend port
+export NEXT_PUBLIC_BACKEND_HTTP_PORT="${NEXT_PUBLIC_BACKEND_HTTP_PORT:-$PORT}"
+
+# If not provided, set frontend/backend base to first non-loopback IP (or localhost)
+if [ -z "${NEXT_PUBLIC_BACKEND_HTTP_BASE:-}" ]; then
+  BACKEND_PORT="${NEXT_PUBLIC_BACKEND_HTTP_PORT:-3001}"
+  IP_CANDIDATE="$(choose_bind_address || true)"
+  if [ -n "$IP_CANDIDATE" ]; then
+    export NEXT_PUBLIC_BACKEND_HTTP_BASE="http://${IP_CANDIDATE}:${BACKEND_PORT}"
+    echo "NEXT_PUBLIC_BACKEND_HTTP_BASE not set; using ${NEXT_PUBLIC_BACKEND_HTTP_BASE} (from ifconfig, local/LAN IP – not a public internet address)"
+  else
+    export NEXT_PUBLIC_BACKEND_HTTP_BASE="http://localhost:${BACKEND_PORT}"
+    echo "NEXT_PUBLIC_BACKEND_HTTP_BASE not set; defaulting to ${NEXT_PUBLIC_BACKEND_HTTP_BASE}"
+  fi
 fi
 
 # Terminal streams close after 10 minutes idle by default. Override or disable (0) here.

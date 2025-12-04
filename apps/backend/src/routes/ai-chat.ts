@@ -34,6 +34,15 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
 
     const session = await validateToken(request.server, token);
     if (!session) {
+      processLogger.logWebSocket({
+        id: `ai-ws-${sessionId}-${Date.now()}-unauthorized`,
+        connectionId: sessionId,
+        timestamp: new Date().toISOString(),
+        direction: "send",
+        messageType: "ai-chat:close",
+        content: "unauthorized",
+        metadata: { ip: request.ip },
+      });
       connection.socket.close(1008, "unauthorized");
       return;
     }
@@ -428,6 +437,16 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
           fastify.log.error(err, "Failed to handle message");
         }
       });
+
+      processLogger.logWebSocket({
+        id: `ai-ws-${sessionId}-${Date.now()}-open`,
+        connectionId,
+        timestamp: new Date().toISOString(),
+        direction: "receive",
+        messageType: "ai-chat:open",
+        content: `backend=${backend}`,
+        metadata: { ip: request.ip },
+      });
     } catch (err: any) {
       fastify.log.error({ err }, "[AIChat] Failed to initialize AI bridge");
       connection.socket.send(
@@ -448,6 +467,15 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         clearTimeout(challengeTimeout);
         challengeTimeout = null;
       }
+      processLogger.logWebSocket({
+        id: `ai-ws-${sessionId}-${Date.now()}-close`,
+        connectionId,
+        timestamp: new Date().toISOString(),
+        direction: "send",
+        messageType: "ai-chat:close",
+        content: "client closed",
+        metadata: { ip: request.ip },
+      });
       try {
         await sessionManager.releaseSession(sessionId, connectionId, fastify.log);
         fastify.log.info(`[AIChat] Session ${sessionId} connectionId=${connectionId} released`);

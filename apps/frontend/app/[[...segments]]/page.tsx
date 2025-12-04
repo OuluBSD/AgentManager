@@ -227,19 +227,30 @@ const contextActionConfig: Record<ContextTarget, { key: string; label: string }[
 };
 
 function dedupeMessages(items: MessageItem[]): MessageItem[] {
-  // Deduplication disabled - return all messages as-is
-  console.log("[dedupeMessages] Skipping deduplication, returning all messages:", items.length);
-  return items;
+  const result: MessageItem[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = messageKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
 }
 
 function messageKey(message: MessageItem): string {
   const trimmedContent = (message.content || "").trim();
-  const displayRole = (message.displayRole || "").trim();
-  return `${message.chatId}|${message.role}|${trimmedContent}|${displayRole || "display"}`;
+  const rawDisplay = (message.displayRole || "").trim().toLowerCase();
+  const displaySuffix =
+    !rawDisplay ||
+    rawDisplay === message.role.toLowerCase() ||
+    rawDisplay.includes("stream")
+      ? ""
+      : `|${rawDisplay}`;
+  return `${message.chatId}|${message.role}${displaySuffix}|${trimmedContent}`;
 }
 
 function mergeMessages(existing: MessageItem[], incoming: MessageItem[]): MessageItem[] {
-  // DEDUPLICATION DISABLED - Merge by message ID only
   const isTempId = (id?: string | null) =>
     typeof id === "string" && /^(assistant|tool|user)-\d+/.test(id);
 
@@ -290,12 +301,14 @@ function mergeMessages(existing: MessageItem[], incoming: MessageItem[]): Messag
     }
   }
 
-  // Sort by timestamp
-  return Object.values(idMap).sort((a, b) => {
+  // Sort by timestamp then drop consecutive duplicates
+  const merged = Object.values(idMap).sort((a, b) => {
     const aTime = Date.parse(a.createdAt);
     const bTime = Date.parse(b.createdAt);
     return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
   });
+
+  return dedupeMessages(merged);
 }
 
 function messagesEqual(a: MessageItem[], b: MessageItem[]): boolean {
@@ -848,6 +861,7 @@ export default function Page() {
   const [toolsTab, setToolsTab] = useState<"Terminal" | "Code">("Terminal");
   const [chatTabState, setChatTabState] = useState<Record<string, MainTab>>({});
   const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
+  const [terminalWsCandidates, setTerminalWsCandidates] = useState<string[]>([]);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [sidebarHover, setSidebarHover] = useState(false);
   const [windowWidth, setWindowWidth] = useState(
@@ -858,6 +872,7 @@ export default function Page() {
   const [terminalConnecting, setTerminalConnecting] = useState(false);
   const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
   const terminalSocket = useRef<WebSocket | null>(null);
+  const terminalWsCandidatesRef = useRef<string[]>([]);
   const [fsPath, setFsPath] = useState<string>(".");
   const [fsEntries, setFsEntries] = useState<FileEntry[]>([]);
   const [fsContentPath, setFsContentPath] = useState<string | null>(null);
@@ -3525,7 +3540,7 @@ export default function Page() {
     }
   }, [loadMessagesForChat, selectedChatId, sessionToken]);
 
-  const connectTerminalStream = (sessionId: string, token: string) => {
+  const connectTerminalStream = (sessionId: string, token: string, serverCandidates?: string[]) => {
     if (!sessionId || !token) return;
     if (terminalSocket.current) {
       terminalSocket.current.close();
@@ -3534,61 +3549,115 @@ export default function Page() {
     setTerminalConnecting(true);
     setTerminalStatus("Connecting to terminal…");
     setTerminalOutput("Connecting to terminal…\n");
-    const ws = new WebSocket(buildTerminalWsUrl(token, sessionId));
-    terminalSocket.current = ws;
 
-    ws.onopen = () => {
-      setTerminalConnecting(false);
-      setTerminalStatus(`Connected to session ${sessionId}`);
-      setTerminalOutput((prev) => `${prev}[connected to ${sessionId}]\n`);
-    };
-
-    ws.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        setTerminalOutput((prev) => `${prev}${event.data}`);
-        updateTerminalStatusFromText(event.data);
-      } else if (event.data instanceof Blob) {
-        event.data.text().then((text) => {
-          setTerminalOutput((prev) => `${prev}${text}`);
-          updateTerminalStatusFromText(text);
-        });
-      } else if (event.data instanceof ArrayBuffer) {
-        const text = new TextDecoder().decode(new Uint8Array(event.data));
-        setTerminalOutput((prev) => `${prev}${text}`);
-        updateTerminalStatusFromText(text);
+    const decodePayload = async (data: unknown): Promise<string | null> => {
+      if (typeof data === "string") return data;
+      if (data instanceof ArrayBuffer) {
+        return new TextDecoder().decode(data);
       }
+      if (typeof Blob !== "undefined" && data instanceof Blob) {
+        try {
+          const buffer = await data.arrayBuffer();
+          return new TextDecoder().decode(buffer);
+        } catch {
+          return null;
+        }
+      }
+      return null;
     };
 
-    ws.onerror = (event) => {
-      const message = (event as ErrorEvent)?.message ?? "socket error";
-      setTerminalOutput((prev) => `${prev}\n[stream error: ${message}]\n`);
-      setTerminalConnecting(false);
-      setTerminalStatus(`Stream error: ${message}`);
-    };
-    ws.onclose = (event) => {
-      setTerminalConnecting(false);
-      const reason =
-        event.reason ||
-        (event.code === 1008 ? "unauthorized" : event.code === 1006 ? "abnormal closure" : "");
-      if (event.code === 1008) {
-        setStatusMessage("Terminal auth failed. Try logging in again.");
-        setTerminalSessionId(null);
+    const candidateList = buildTerminalWsCandidates(token, sessionId, serverCandidates);
+
+    const tryCandidate = (index: number) => {
+      const targetUrl = candidateList[index];
+      if (!targetUrl) {
+        setTerminalConnecting(false);
+        setTerminalStatus("Failed to connect to terminal stream");
+        return;
       }
-      setTerminalOutput(
-        (prev) => `${prev}\n[stream closed (${event.code}${reason ? `: ${reason}` : ""})]\n`
-      );
-      const idleClosed = reason === "idle timeout" || event.code === 4000;
-      if (idleClosed) {
-        setTerminalStatus((prev) => prev ?? "Closed after idle timeout");
-      } else {
-        const summary = reason
-          ? `Stream closed (${reason})`
-          : event.code
-            ? `Stream closed (code ${event.code})`
-            : "Stream closed.";
-        setTerminalStatus((prev) => prev ?? summary);
-      }
+
+      const ws = new WebSocket(targetUrl);
+      ws.binaryType = "arraybuffer";
+      terminalSocket.current = ws;
+      let opened = false;
+
+      const handleEarlyFailure = () => {
+        if (terminalSocket.current !== ws || opened) return;
+        ws.close();
+        if (terminalSocket.current === ws) {
+          terminalSocket.current = null;
+        }
+        tryCandidate(index + 1);
+      };
+
+      ws.onopen = () => {
+        opened = true;
+        setTerminalConnecting(false);
+        setTerminalStatus(`Connected to session ${sessionId}`);
+        setTerminalOutput((prev) => `${prev}[connected to ${sessionId}]\n`);
+      };
+
+      ws.onmessage = (event) => {
+        const maybePromise = decodePayload(event.data);
+        if (maybePromise instanceof Promise) {
+          maybePromise.then((text) => {
+            if (text != null) {
+              setTerminalOutput((prev) => `${prev}${text}`);
+              updateTerminalStatusFromText(text);
+            }
+          });
+        } else if (maybePromise != null) {
+          setTerminalOutput((prev) => `${prev}${maybePromise}`);
+          updateTerminalStatusFromText(maybePromise);
+        }
+      };
+
+      ws.onerror = (event) => {
+        if (!opened) {
+          handleEarlyFailure();
+          return;
+        }
+        const message = (event as ErrorEvent)?.message ?? "socket error";
+        setTerminalOutput((prev) => `${prev}\n[stream error: ${message}]\n`);
+        setTerminalConnecting(false);
+        setTerminalStatus(`Stream error: ${message}`);
+      };
+
+      ws.onclose = (event) => {
+        if (terminalSocket.current !== ws) return;
+        if (!opened) {
+          handleEarlyFailure();
+          return;
+        }
+        terminalSocket.current = null;
+        setTerminalConnecting(false);
+        const reason =
+          event.reason ||
+          (event.code === 1008 ? "unauthorized" : event.code === 1006 ? "abnormal closure" : "");
+        if (event.code === 1008) {
+          setStatusMessage("Terminal auth failed. Try logging in again.");
+          setTerminalSessionId(null);
+        }
+        setTerminalOutput(
+          (prev) => `${prev}\n[stream closed (${event.code}${reason ? `: ${reason}` : ""})]\n`
+        );
+        terminalWsCandidatesRef.current = [];
+        setTerminalWsCandidates([]);
+        const idleClosed = reason === "idle timeout" || event.code === 4000;
+        if (idleClosed) {
+          setTerminalStatus((prev) => prev ?? "Closed after idle timeout");
+        } else {
+          const summary = reason
+            ? `Stream closed (${reason})`
+            : event.code
+              ? `Stream closed (code ${event.code})`
+              : "Stream closed.";
+          setTerminalStatus((prev) => prev ?? summary);
+        }
+      };
     };
+
+    tryCandidate(0);
   };
 
   const startTerminalSession = async () => {
@@ -3600,12 +3669,15 @@ export default function Page() {
     setTerminalStatus("Starting terminal session…");
     setTerminalOutput("Starting terminal session…\n");
     try {
-      const { sessionId } = await createTerminalSession(
+      const { sessionId, wsCandidates } = await createTerminalSession(
         sessionToken,
         selectedProjectId ?? undefined
       );
       setTerminalSessionId(sessionId);
-      connectTerminalStream(sessionId, sessionToken);
+      const providedCandidates = Array.isArray(wsCandidates) ? wsCandidates : [];
+      terminalWsCandidatesRef.current = providedCandidates;
+      setTerminalWsCandidates(providedCandidates);
+      connectTerminalStream(sessionId, sessionToken, providedCandidates);
     } catch (err) {
       setTerminalOutput(
         `Failed to start terminal: ${err instanceof Error ? err.message : "unknown error"}\n`
@@ -3971,19 +4043,11 @@ export default function Page() {
   const siblingTasks = chats.filter((chat) => !chat.meta && chat.id && chat.id !== selectedChatId);
   const lastStatusMessage = [...messages].reverse().find((msg) => msg.role === "status");
 
-  console.log("[visibleMessages] Current filter:", messageFilter);
-  console.log("[visibleMessages] Total messages:", messages.length);
-  console.log(
-    "[visibleMessages] Message roles:",
-    messages.map((m) => ({ id: m.id, role: m.role, displayRole: m.displayRole }))
-  );
-
   const visibleMessages =
     messageFilter === "all"
       ? messages
       : messages.filter((message) => message.role === messageFilter);
 
-  console.log("[visibleMessages] Visible after filter:", visibleMessages.length);
   const selectedChatTokens = selectedChatId ? chatTokenUsage[selectedChatId] : null;
   const contextLimitForChat =
     selectedChatTokens?.contextLimit && selectedChatTokens.contextLimit > 0

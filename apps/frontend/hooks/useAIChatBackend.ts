@@ -148,6 +148,8 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
   const lastToolMessageId = useRef<number | null>(null);
   const toolPendingRef = useRef(false);
   const lastToolSnapshotRef = useRef<{ content: string; displayRole?: string } | null>(null);
+  const lastStreamingChunkRef = useRef("");
+  const lastAssistantFinalRef = useRef("");
 
   useEffect(() => {
     optionsRef.current = options;
@@ -467,6 +469,13 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
           if (msg.isStreaming !== false) {
             // Streaming chunk - accumulate deltas from backend
             const chunk = msg.content || "";
+            if (chunk && chunk === lastStreamingChunkRef.current) {
+              console.log(
+                `[useAIChatBackend:${connectionIdRef.current}] Skipping duplicate streaming chunk`
+              );
+              return;
+            }
+            lastStreamingChunkRef.current = chunk;
             console.log(
               `[useAIChatBackend:${connectionIdRef.current}] Streaming chunk, chunk length:`,
               chunk.length
@@ -502,6 +511,17 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
                 `[useAIChatBackend:${connectionIdRef.current}] Using ${prev ? "accumulated" : "final message"} content`
               );
               if (finalContent) {
+                if (
+                  finalContent === lastAssistantFinalRef.current ||
+                  finalContent === streamingContentRef.current
+                ) {
+                  console.log(
+                    `[useAIChatBackend:${connectionIdRef.current}] Skipping duplicate final assistant content`
+                  );
+                  lastStreamingChunkRef.current = "";
+                  streamingContentRef.current = "";
+                  return "";
+                }
                 const assistantMessage: ChatMessage = {
                   id: nextMessageId.current++,
                   role: "assistant",
@@ -527,7 +547,9 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
                   }
                   return [...msgs, assistantMessage];
                 });
+                lastAssistantFinalRef.current = finalContent;
               }
+              lastStreamingChunkRef.current = "";
               streamingContentRef.current = "";
               optionsRef.current.onAssistantMessage?.({ content: finalContent, final: true });
               return ""; // Clear streaming content

@@ -189,3 +189,14 @@ export const projectWorkspaces = pgTable("project_workspaces", {
   workspacePath: text("workspace_path").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+export const userTerminalSettings = pgTable("user_terminal_settings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .references(() => users.id, { onDelete: "cascade" })
+    .notNull()
+    .unique(),
+  settings: jsonb("settings").notNull(), // TerminalSettings object
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

@@ -22,7 +22,7 @@ export function resolveBackendBase(): string {
       const envUrl = new URL(envBase.replace(/\/$/, ""));
       const envHostIsLocal = isLocalHost(envUrl.hostname);
 
-      // If env points to localhost but we're being accessed via a LAN host, prefer the LAN host.
+      // If env points to localhost but the app is accessed via a LAN host, prefer the LAN host.
       if (envHostIsLocal && windowUrl && !isLocalHost(windowUrl.hostname)) {
         envUrl.hostname = windowUrl.hostname;
         envUrl.protocol = windowUrl.protocol;

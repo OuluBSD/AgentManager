@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  TerminalSettingsDialog,
+  DEFAULT_SETTINGS,
+  type TerminalSettings,
+} from "./TerminalSettings";
+import { buildTerminalWsCandidates, createTerminalSession } from "../lib/api";
 
 // Dynamic imports to avoid SSR issues
 let XTermClass: typeof import("@xterm/xterm").Terminal | null = null;
@@ -25,97 +31,260 @@ export function Terminal({
   const xtermRef = useRef<InstanceType<typeof import("@xterm/xterm").Terminal> | null>(null);
   const fitAddonRef = useRef<InstanceType<typeof import("@xterm/addon-fit").FitAddon> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const onDataDisposableRef = useRef<{ dispose: () => void } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isAttached, setIsAttached] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<TerminalSettings>(DEFAULT_SETTINGS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [serverWsCandidates, setServerWsCandidates] = useState<string[]>([]);
+  const serverCandidatesRef = useRef<string[]>([]);
 
   // Create terminal session
-  const createSession = async () => {
+  const createSession = useCallback(async () => {
     try {
-      const res = await fetch(`/api/terminal/sessions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${sessionToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ projectId }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({ error: { message: "Unknown error" } }));
-        throw new Error(errData.error?.message || "Failed to create terminal session");
-      }
-
-      const data = await res.json();
+      const data = await createTerminalSession(sessionToken, projectId);
       setSessionId(data.sessionId);
+      const providedCandidates = Array.isArray(data.wsCandidates) ? data.wsCandidates : [];
+      serverCandidatesRef.current = providedCandidates;
+      setServerWsCandidates(providedCandidates);
       onSessionCreated?.(data.sessionId);
       return data.sessionId;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create session");
       return null;
     }
-  };
+  }, [onSessionCreated, projectId, sessionToken]);
 
   // Attach to terminal session via WebSocket
-  const attachSession = (sid: string) => {
-    if (!xtermRef.current || wsRef.current) return;
-
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/api/terminal/sessions/${sid}/stream?token=${encodeURIComponent(sessionToken)}`;
-
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setIsAttached(true);
-      setError(null);
-    };
-
-    ws.onmessage = (event) => {
-      if (xtermRef.current && typeof event.data === "string") {
-        xtermRef.current.write(event.data);
+  const attachSession = useCallback(
+    (sid: string) => {
+      if (!xtermRef.current) return;
+      if (wsRef.current) {
+        setIsConnecting(false);
+        return;
       }
-    };
 
-    ws.onerror = () => {
-      setError("WebSocket connection error");
-      setIsAttached(false);
-    };
+      const wsCandidates = buildTerminalWsCandidates(
+        sessionToken,
+        sid,
+        serverCandidatesRef.current || serverWsCandidates
+      );
 
-    ws.onclose = () => {
-      setIsAttached(false);
-      wsRef.current = null;
-      if (xtermRef.current) {
-        xtermRef.current.write("\r\n[terminal session closed]\r\n");
-      }
-    };
-
-    // Handle user input
-    if (xtermRef.current) {
-      xtermRef.current.onData((data) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
+      const tryConnect = (index: number) => {
+        const targetUrl = wsCandidates[index];
+        if (!targetUrl) {
+          setError("WebSocket connection error");
+          setIsConnecting(false);
+          setSessionId(null);
+          onSessionClosed?.();
+          return;
         }
-      });
-    }
-  };
+
+        const ws = new WebSocket(targetUrl);
+        ws.binaryType = "arraybuffer";
+        wsRef.current = ws;
+        let opened = false;
+
+        const decodePayload = async (data: unknown): Promise<string | null> => {
+          if (typeof data === "string") return data;
+          if (data instanceof ArrayBuffer) {
+            return new TextDecoder().decode(data);
+          }
+          if (typeof Blob !== "undefined" && data instanceof Blob) {
+            try {
+              const buffer = await data.arrayBuffer();
+              return new TextDecoder().decode(buffer);
+            } catch {
+              return null;
+            }
+          }
+          return null;
+        };
+
+        ws.onopen = () => {
+          if (wsRef.current !== ws) return;
+          opened = true;
+          setIsAttached(true);
+          setIsConnecting(false);
+          setError(null);
+
+          if (xtermRef.current) {
+            onDataDisposableRef.current?.dispose();
+            onDataDisposableRef.current = xtermRef.current.onData((data) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(data);
+              }
+            });
+          }
+        };
+
+        ws.onmessage = (event) => {
+          if (!xtermRef.current || wsRef.current !== ws) return;
+          const maybePromise = decodePayload(event.data);
+          if (maybePromise instanceof Promise) {
+            maybePromise.then((text) => {
+              if (text && xtermRef.current && wsRef.current === ws) {
+                xtermRef.current.write(text);
+              }
+            });
+          } else if (maybePromise) {
+            xtermRef.current.write(maybePromise);
+          }
+        };
+
+        const handleEarlyFailure = () => {
+          if (wsRef.current !== ws || opened) return;
+          ws.close();
+          wsRef.current = null;
+          const nextIndex = index + 1;
+          tryConnect(nextIndex);
+        };
+
+        ws.onerror = () => {
+          if (!opened) {
+            handleEarlyFailure();
+            return;
+          }
+          setError("WebSocket connection error");
+          setIsAttached(false);
+          setIsConnecting(false);
+        };
+
+        ws.onclose = (event) => {
+          if (wsRef.current !== ws) return;
+          if (!opened) {
+            handleEarlyFailure();
+            return;
+          }
+          setIsAttached(false);
+          setIsConnecting(false);
+          wsRef.current = null;
+          onDataDisposableRef.current?.dispose();
+          onDataDisposableRef.current = null;
+          const closeDetail = event.reason
+            ? event.reason
+            : event.code
+              ? `code ${event.code}`
+              : "connection closed";
+          if (xtermRef.current) {
+            xtermRef.current.write(
+              `\r\n[terminal session closed${closeDetail ? ` (${closeDetail})` : ""}]\r\n`
+            );
+          }
+          // Always drop sessionId because the backend tears down the session on close.
+          setSessionId(null);
+          serverCandidatesRef.current = [];
+          setServerWsCandidates([]);
+          onSessionClosed?.();
+        };
+      };
+
+      tryConnect(0);
+    },
+    [onSessionClosed, serverWsCandidates, sessionToken]
+  );
 
   // Detach from terminal session
   const detachSession = () => {
+    onDataDisposableRef.current?.dispose();
+    onDataDisposableRef.current = null;
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
+    setSessionId(null);
+    serverCandidatesRef.current = [];
+    setServerWsCandidates([]);
+    setIsConnecting(false);
     setIsAttached(false);
   };
 
+  // Load settings from backend or localStorage
+  useEffect(() => {
+    if (settingsLoaded) return;
+
+    const loadSettings = async () => {
+      try {
+        // Try to load from backend first
+        const res = await fetch("/api/user/settings/terminal", {
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+          },
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.settings) {
+            setSettings(data.settings);
+            setSettingsLoaded(true);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to load settings from backend, using localStorage", err);
+      }
+
+      // Fallback to localStorage
+      if (typeof window !== "undefined") {
+        const saved = localStorage.getItem("terminal-settings");
+        if (saved) {
+          try {
+            setSettings(JSON.parse(saved));
+          } catch {
+            setSettings(DEFAULT_SETTINGS);
+          }
+        }
+      }
+      setSettingsLoaded(true);
+    };
+
+    loadSettings();
+  }, [sessionToken, settingsLoaded]);
+
+  // Persist settings to localStorage and backend
+  useEffect(() => {
+    if (!settingsLoaded) return;
+
+    // Save to localStorage
+    if (typeof window !== "undefined") {
+      localStorage.setItem("terminal-settings", JSON.stringify(settings));
+    }
+
+    // Save to backend
+    const saveToBackend = async () => {
+      try {
+        await fetch("/api/user/settings/terminal", {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ settings }),
+        });
+      } catch (err) {
+        console.warn("Failed to save settings to backend", err);
+      }
+    };
+
+    saveToBackend();
+  }, [settings, sessionToken, settingsLoaded]);
+
   // Initialize xterm instance
   useEffect(() => {
-    if (!terminalRef.current || xtermRef.current) return;
+    if (!terminalRef.current) return;
 
     let mounted = true;
     let resizeObserver: ResizeObserver | null = null;
+
+    // Dispose of existing terminal
+    if (xtermRef.current) {
+      xtermRef.current.dispose();
+      xtermRef.current = null;
+      fitAddonRef.current = null;
+    }
 
     // Dynamically import xterm only on client side
     Promise.all([
@@ -130,33 +299,11 @@ export function Terminal({
         if (!mounted || !terminalRef.current || !XTermClass || !FitAddonClass) return;
 
         const xterm = new XTermClass({
-          cursorBlink: true,
-          fontSize: 14,
-          fontFamily: '"Cascadia Code", Menlo, Monaco, "Courier New", monospace',
-          theme: {
-            background: "#0D1117",
-            foreground: "#E5E7EB",
-            cursor: "#0EA5E9",
-            cursorAccent: "#111827",
-            selectionBackground: "#1F2937",
-            black: "#1F2937",
-            red: "#F87171",
-            green: "#6EE7B7",
-            yellow: "#FCD34D",
-            blue: "#60A5FA",
-            magenta: "#C084FC",
-            cyan: "#22D3EE",
-            white: "#E5E7EB",
-            brightBlack: "#374151",
-            brightRed: "#FCA5A5",
-            brightGreen: "#A7F3D0",
-            brightYellow: "#FDE68A",
-            brightBlue: "#93C5FD",
-            brightMagenta: "#DDD6FE",
-            brightCyan: "#A5F3FC",
-            brightWhite: "#F9FAFB",
-          },
-          scrollback: 1000,
+          cursorBlink: settings.cursorBlink,
+          fontSize: settings.fontSize,
+          fontFamily: settings.fontFamily,
+          theme: settings.theme,
+          scrollback: settings.scrollback,
           allowProposedApi: true,
         });
 
@@ -168,6 +315,15 @@ export function Terminal({
 
         xtermRef.current = xterm;
         fitAddonRef.current = fitAddon;
+
+        // Reattach WebSocket if still connected
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          xterm.onData((data) => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(data);
+            }
+          });
+        }
 
         // Handle resize
         resizeObserver = new ResizeObserver(() => {
@@ -196,7 +352,7 @@ export function Terminal({
         fitAddonRef.current = null;
       }
     };
-  }, []);
+  }, [settings]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -210,25 +366,63 @@ export function Terminal({
   }, [onSessionClosed]);
 
   const handlePlay = useCallback(async () => {
-    if (!sessionId) {
-      const sid = await createSession();
-      if (sid) {
-        attachSession(sid);
-      }
-    } else if (!isAttached) {
-      attachSession(sessionId);
+    if (isAttached) return;
+    setIsConnecting(true);
+
+    let sid = sessionId;
+    if (!sid) {
+      sid = await createSession();
     }
-  }, [sessionId, createSession, isAttached, attachSession]);
+
+    if (sid) {
+      attachSession(sid);
+    } else {
+      setIsConnecting(false);
+    }
+  }, [attachSession, createSession, isAttached, isConnecting, sessionId]);
 
   // useEffect to trigger auto-connect
   useEffect(() => {
-    if (autoConnect && sessionToken && projectId && !isAttached) {
+    if (autoConnect && sessionToken && projectId && !isAttached && !isConnecting) {
       handlePlay();
     }
-  }, [autoConnect, sessionToken, projectId, isAttached, handlePlay]);
+  }, [autoConnect, sessionToken, projectId, isAttached, isConnecting, handlePlay]);
 
   const handleStop = () => {
     detachSession();
+  };
+
+  const handleSaveSettings = (newSettings: TerminalSettings) => {
+    setSettings(newSettings);
+    setShowSettings(false);
+  };
+
+  const getGradientStyle = () => {
+    if (!settings.enableGradient) return undefined;
+
+    const direction =
+      settings.gradientDirection === "vertical"
+        ? "to bottom"
+        : settings.gradientDirection === "horizontal"
+          ? "to right"
+          : "to bottom right";
+
+    return `linear-gradient(${direction}, ${settings.gradientStartColor}, ${settings.gradientEndColor})`;
+  };
+
+  const getBackgroundStyle = () => {
+    const styles: React.CSSProperties = {
+      background: settings.theme.background,
+    };
+
+    if (settings.backgroundImage) {
+      styles.backgroundImage = `url(${settings.backgroundImage})`;
+      styles.backgroundSize = "cover";
+      styles.backgroundPosition = "center";
+      styles.backgroundRepeat = "no-repeat";
+    }
+
+    return styles;
   };
 
   return (
@@ -269,6 +463,17 @@ export function Terminal({
         >
           ◼ Detach
         </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => setShowSettings(true)}
+          style={{
+            fontSize: "0.875rem",
+            cursor: "pointer",
+          }}
+        >
+          ⚙ Settings
+        </button>
         {sessionId && (
           <span className="item-subtle" style={{ fontSize: "0.75rem" }}>
             Session: {sessionId.slice(0, 8)}
@@ -303,16 +508,64 @@ export function Terminal({
       )}
 
       <div
-        ref={terminalRef}
         style={{
           flex: 1,
-          background: "#0D1117",
+          position: "relative",
           borderRadius: "8px",
           border: "1px solid #30363D",
-          padding: "0.5rem",
           overflow: "hidden",
         }}
-      />
+      >
+        {/* Background layer with gradient and/or image */}
+        {(settings.enableGradient || settings.backgroundImage) && (
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 0,
+              ...getBackgroundStyle(),
+              opacity: settings.backgroundImage ? settings.backgroundOpacity : settings.gradientOpacity,
+            }}
+          >
+            {settings.enableGradient && !settings.backgroundImage && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: getGradientStyle(),
+                }}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Terminal layer */}
+        <div
+          ref={terminalRef}
+          style={{
+            position: "relative",
+            zIndex: 1,
+            width: "100%",
+            height: "100%",
+            padding: "0.5rem",
+          }}
+        />
+      </div>
+
+      {/* Settings Dialog */}
+      {showSettings && (
+        <TerminalSettingsDialog
+          settings={settings}
+          onSave={handleSaveSettings}
+          onCancel={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }
