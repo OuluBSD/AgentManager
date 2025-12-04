@@ -232,7 +232,16 @@ export function Terminal({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", height: "100%" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.5rem",
+        height: "100%",
+        maxHeight: "100%",
+        overflow: "hidden",
+      }}
+    >
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
         <button
           type="button"
@@ -297,7 +306,6 @@ export function Terminal({
         ref={terminalRef}
         style={{
           flex: 1,
-          minHeight: "400px",
           background: "#0D1117",
           borderRadius: "8px",
           border: "1px solid #30363D",

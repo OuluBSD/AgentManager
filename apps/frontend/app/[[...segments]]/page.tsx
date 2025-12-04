@@ -845,8 +845,14 @@ export default function Page() {
   });
   const [projectThemePreset, setProjectThemePreset] = useState<ProjectThemePresetKey>("default");
   const [activeTab, setActiveTab] = useState<MainTab>("Chat");
+  const [toolsTab, setToolsTab] = useState<"Terminal" | "Code">("Terminal");
   const [chatTabState, setChatTabState] = useState<Record<string, MainTab>>({});
   const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
+  const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [sidebarHover, setSidebarHover] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(
+    typeof window !== "undefined" ? window.innerWidth : 1920
+  );
   const [terminalOutput, setTerminalOutput] = useState<string>("Connect to stream to see output.");
   const [terminalInput, setTerminalInput] = useState<string>("");
   const [terminalConnecting, setTerminalConnecting] = useState(false);
@@ -1289,6 +1295,28 @@ export default function Page() {
       setAutoDemoLog("Idle.");
     }
   }, [autoDemoAiEnabled, disconnectAutoDemo, isAutoDemoChat]);
+
+  // Window resize handler for responsive splitter
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Home key handler for sidebar toggle
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Home" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const target = e.target as HTMLElement;
+        // Don't toggle if user is typing in an input
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+        e.preventDefault();
+        setSidebarVisible((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const loadMessagesForChat = useCallback(
     async (chatId: string, token: string) => {
@@ -4787,7 +4815,37 @@ export default function Page() {
               {statusMessage}
             </div>
           )}
-          <div className="columns">
+          {/* Sidebar Trigger Bar */}
+          <div
+            className="sidebar-trigger"
+            onMouseEnter={() => setSidebarHover(true)}
+            onMouseLeave={() => setSidebarHover(false)}
+            onClick={() => setSidebarVisible(!sidebarVisible)}
+          >
+            <span className="sidebar-trigger-icon">Lists</span>
+            <div className="sidebar-trigger-dot" />
+            <div className="sidebar-trigger-dot" />
+            <div className="sidebar-trigger-dot" />
+          </div>
+
+          {/* Sidebar Overlay */}
+          {(sidebarVisible || sidebarHover) && (
+            <div
+              className={`sidebar-overlay ${sidebarVisible || sidebarHover ? "visible" : ""}`}
+              onClick={() => {
+                setSidebarVisible(false);
+                setSidebarHover(false);
+              }}
+            />
+          )}
+
+          {/* Sidebar Popup */}
+          <div
+            className={`sidebar-popup ${sidebarVisible || sidebarHover ? "visible" : ""}`}
+            onMouseEnter={() => setSidebarHover(true)}
+            onMouseLeave={() => setSidebarHover(false)}
+          >
+            {/* Projects Column */}
             <div className="column projects-column column-animated">
               <header className="column-header">
                 <span>Projects</span>
@@ -5021,23 +5079,150 @@ export default function Page() {
                 ))}
               </div>
             </div>
+          </div>
 
-            <div className="column main-panel column-animated">
-              <header className="column-header">
-                <span>Main Panel</span>
-                <div className="tabs">
-                  {["Chat", "Terminal", "Code"].map((tab) => (
-                    <button
-                      key={tab}
-                      className={`tab ${activeTab === tab ? "active" : ""}`}
-                      onClick={() => handleTabChange(tab as MainTab)}
-                    >
-                      {tab}
-                    </button>
-                  ))}
+          {/* Main Content with Responsive Splitter */}
+          <div
+            className={`main-content-wrapper ${windowWidth < 900 ? "vertical" : ""}`}
+            style={{ marginLeft: "32px" }}
+          >
+            {/* Chat Section - Always Visible */}
+            <div className="main-content-chat">
+              <div className="column main-panel column-animated">
+                <header className="column-header">
+                  <span>Chat</span>
+                </header>
+                <div className="panel-body">
+                  {/* Always render chat content */}
+                  {tabBody}
                 </div>
-              </header>
-              <div className="panel-body">{tabBody}</div>
+              </div>
+            </div>
+
+            {/* Terminal/Code Section - Tabs */}
+            <div className="main-content-panels">
+              <div className="column main-panel column-animated">
+                <header className="column-header">
+                  <span>Tools</span>
+                  <div className="tabs">
+                    {["Terminal", "Code"].map((tab) => (
+                      <button
+                        key={tab}
+                        className={`tab ${toolsTab === tab ? "active" : ""}`}
+                        onClick={() => setToolsTab(tab as "Terminal" | "Code")}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+                </header>
+                <div className="panel-body">
+                  {toolsTab === "Terminal" ? (
+                    !sessionToken ? (
+                      <div className="panel-card">
+                        <div className="panel-title">Terminal</div>
+                        <div className="panel-text">Please log in to use the terminal.</div>
+                      </div>
+                    ) : !selectedProjectId ? (
+                      <div className="panel-card">
+                        <div className="panel-title">Terminal</div>
+                        <div className="panel-text">
+                          Select a project to start a terminal session.
+                        </div>
+                      </div>
+                    ) : (
+                      <Terminal
+                        sessionToken={sessionToken}
+                        projectId={selectedProjectId}
+                        onSessionCreated={(sid) => setTerminalSessionId(sid)}
+                        onSessionClosed={() => setTerminalSessionId(null)}
+                        autoConnect={autoOpenTerminal}
+                      />
+                    )
+                  ) : toolsTab === "Code" ? (
+                    <div className="panel-card">
+                      <div className="panel-title">Code Viewer</div>
+                      <div className="panel-text">
+                        Browse workspace files for the selected project (read-only).
+                      </div>
+                      <div className="login-row" style={{ gap: 8, marginBottom: 6 }}>
+                        <button className="tab" onClick={goUpDirectory} disabled={fsLoading}>
+                          ↑ Up
+                        </button>
+                        <input
+                          className="filter"
+                          placeholder="Path"
+                          value={fsPath}
+                          onChange={(e) => setFsPath(e.target.value)}
+                          style={{ flex: 1 }}
+                        />
+                        <button
+                          className="tab"
+                          onClick={() => loadFsTree(fsPath)}
+                          disabled={fsLoading}
+                        >
+                          Open
+                        </button>
+                      </div>
+                      {fsError && (
+                        <div className="item-subtle" style={{ color: "#EF4444" }}>
+                          {fsError}
+                        </div>
+                      )}
+                      <FileTree
+                        entries={fsEntries}
+                        currentPath={fsPath}
+                        onSelectFile={openFile}
+                        onNavigateDir={loadFsTree}
+                        loading={fsLoading}
+                      />
+                      {fsContentPath && (
+                        <>
+                          <div className="item-subtle" style={{ marginBottom: 6 }}>
+                            {fsContentPath} {fsDraft !== fsContent ? "(unsaved)" : null}{" "}
+                            {fsSaveStatus}
+                          </div>
+                          <CodeViewer
+                            content={fsDraft}
+                            filePath={fsContentPath}
+                            readOnly={false}
+                            onChange={(newContent) => {
+                              setFsDraft(newContent);
+                              setFsSaveStatus(null);
+                            }}
+                          />
+                          <div
+                            className="login-row"
+                            style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}
+                          >
+                            <button
+                              className="ghost"
+                              onClick={() => setFsDraft(fsContent)}
+                              disabled={fsDraft === fsContent || fsSaving || fsLoading}
+                            >
+                              Reset
+                            </button>
+                            <button
+                              className="tab"
+                              onClick={saveFile}
+                              disabled={
+                                fsDraft === fsContent ||
+                                fsSaving ||
+                                fsLoading ||
+                                !sessionToken ||
+                                !selectedProjectId
+                              }
+                            >
+                              {fsSaving ? "Saving…" : "Save"}
+                            </button>
+                            {fsSaveStatus && <span className="item-subtle">{fsSaveStatus}</span>}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
 

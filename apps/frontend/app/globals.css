@@ -51,10 +51,13 @@ body {
 
 .page {
   min-height: calc(100vh - 42px);
+  max-height: calc(100vh - 42px);
+  height: calc(100vh - 42px);
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow: hidden;
 }
 
 .columns {
@@ -76,6 +79,7 @@ body {
   min-height: 0;
   height: 100%;
   min-width: 0;
+  overflow: hidden;
 }
 
 .column-header {
@@ -100,6 +104,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .project-group {
@@ -357,6 +364,8 @@ body {
 .panel-body {
   margin-top: 10px;
   flex: 1;
+  overflow: auto;
+  min-height: 0;
 }
 
 .panel-card {
@@ -749,6 +758,135 @@ body {
   animation-delay: 0.2s;
 }
 
+/* Popup Sidebar Styles */
+.sidebar-trigger {
+  position: fixed;
+  left: 0;
+  top: 42px;
+  bottom: 0;
+  width: 32px;
+  background: linear-gradient(90deg, rgba(14, 165, 233, 0.08) 0%, transparent 100%);
+  border-right: 1px solid rgba(14, 165, 233, 0.2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 20px;
+  gap: 12px;
+  z-index: 90;
+  transition: all 0.2s ease;
+}
+
+.sidebar-trigger:hover {
+  background: linear-gradient(90deg, rgba(14, 165, 233, 0.15) 0%, transparent 100%);
+  border-right-color: rgba(14, 165, 233, 0.4);
+}
+
+.sidebar-trigger-icon {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  opacity: 0.7;
+  text-transform: uppercase;
+}
+
+.sidebar-trigger-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(14, 165, 233, 0.4);
+}
+
+.sidebar-popup {
+  position: fixed;
+  left: 32px;
+  top: 42px;
+  bottom: 0;
+  width: 70%;
+  max-width: 1200px;
+  min-width: 800px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 85;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  padding: 20px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.sidebar-popup.visible {
+  transform: translateX(0);
+}
+
+.sidebar-popup > .column {
+  overflow-y: auto;
+  min-width: 0;
+  grid-area: auto !important; /* Override grid-area assignments for sidebar columns */
+  height: 100%;
+  max-height: 100%;
+}
+
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  z-index: 80;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.sidebar-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Main content area with splitter */
+.main-content-wrapper {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+}
+
+.main-content-wrapper.vertical {
+  flex-direction: column;
+}
+
+.main-content-chat {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+}
+
+.main-content-chat > .column {
+  width: 100%;
+}
+
+.main-content-panels {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+}
+
+.main-content-panels > .column {
+  width: 100%;
+}
+
 @media (max-width: 1200px) {
   .columns {
     grid-template-areas:
@@ -1088,16 +1226,8 @@ body {
   border-radius: 8px;
   padding: 10px;
   font-family:
-    "JetBrains Mono",
-    "SFMono-Regular",
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    "Liberation Mono",
-    "Courier New",
-    monospace;
+    "JetBrains Mono", "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
   font-size: 13px;
   overflow-x: auto;
   white-space: pre;
