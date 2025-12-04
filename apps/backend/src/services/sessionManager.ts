@@ -57,7 +57,7 @@ class SessionManagerService {
     chain: AiChainSelection,
     onMessage: (msg: any) => void,
     config?: SessionConfig
-  ): Promise<{ bridge: AiBridge; connectionId: string }> {
+  ): Promise<{ bridge: AiBridge; connectionId: string; isNew: boolean }> {
     let existing = this.sessions.get(sessionId);
 
     if (existing) {
@@ -107,7 +107,7 @@ class SessionManagerService {
         processLogger.trackSessionReopen(processId);
       }
 
-      return { bridge: existing.bridge, connectionId };
+      return { bridge: existing.bridge, connectionId, isNew: false };
     }
 
     // Create new session - reserve the slot immediately to prevent race conditions
@@ -154,7 +154,7 @@ class SessionManagerService {
         `[SessionManager] Session ${sessionId} created (refCount: 1, reopenCount: 0, handlers: 1)`
       );
 
-      return { bridge, connectionId };
+      return { bridge, connectionId, isNew: true };
     })();
 
     // Store a placeholder with the initialization promise
