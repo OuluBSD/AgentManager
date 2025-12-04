@@ -113,15 +113,24 @@ export function AIChat({ sessionToken, onBackendConnect, onBackendDisconnect }: 
 
   // Auto-connect when session token is available and disconnect on session change
   useEffect(() => {
-    if (sessionToken) {
-      // Disconnect any existing connection when session changes
-      disconnect();
-      // Then connect to the new session
-      connect();
-    }
+    let cancelled = false;
+
+    const reconnect = async () => {
+      if (sessionToken && !cancelled) {
+        // Disconnect any existing connection when session changes
+        await disconnect();
+        // Then connect to the new session (only if not cancelled)
+        if (!cancelled) {
+          connect();
+        }
+      }
+    };
+
+    reconnect();
 
     // Cleanup on unmount
     return () => {
+      cancelled = true;
       disconnect();
     };
   }, [sessionToken, activeSessionId, connect, disconnect]);

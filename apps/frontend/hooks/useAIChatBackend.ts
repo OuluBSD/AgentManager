@@ -269,46 +269,68 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
 
   // Disconnect from backend
   const disconnect = useCallback(() => {
-    console.log("[useAIChatBackend] disconnect() called, current ws:", wsRef.current?.readyState);
-    if (wsRef.current) {
-      // Send disconnect message to backend BEFORE closing to immediately release session
-      // This prevents race condition where old handler isn't removed before new connection adds a new one
-      if (wsRef.current.readyState === WebSocket.OPEN) {
-        try {
-          wsRef.current.send(
-            JSON.stringify({
-              type: "disconnect",
-            })
-          );
-          console.log("[useAIChatBackend] Sent disconnect message to backend");
-        } catch (err) {
-          console.error("[useAIChatBackend] Failed to send disconnect message:", err);
+    return new Promise<void>((resolve) => {
+      console.log("[useAIChatBackend] disconnect() called, current ws:", wsRef.current?.readyState);
+      if (wsRef.current) {
+        const ws = wsRef.current;
+
+        // Set up one-time close handler to resolve promise
+        const handleClose = () => {
+          console.log("[useAIChatBackend] WebSocket closed, disconnect complete");
+          resolve();
+        };
+
+        // Send disconnect message to backend BEFORE closing to immediately release session
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(
+              JSON.stringify({
+                type: "disconnect",
+              })
+            );
+            console.log("[useAIChatBackend] Sent disconnect message to backend");
+          } catch (err) {
+            console.error("[useAIChatBackend] Failed to send disconnect message:", err);
+          }
         }
+
+        // Remove existing event listeners
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onopen = null;
+
+        // Set close handler to resolve promise
+        ws.onclose = handleClose;
+
+        if (ws.readyState !== WebSocket.CLOSED) {
+          ws.close();
+          // If already closing or closed, resolve immediately
+          if (ws.readyState === WebSocket.CLOSED) {
+            handleClose();
+          }
+        } else {
+          handleClose();
+        }
+
+        wsRef.current = null;
+      } else {
+        // No WebSocket to disconnect, resolve immediately
+        resolve();
       }
 
-      // Remove event listeners before closing to prevent race conditions
-      wsRef.current.onmessage = null;
-      wsRef.current.onerror = null;
-      wsRef.current.onclose = null;
-      wsRef.current.onopen = null;
-
-      if (wsRef.current.readyState !== WebSocket.CLOSED) {
-        wsRef.current.close();
-      }
-      wsRef.current = null;
-    }
-    // Clear messages and state when disconnecting
-    setMessages([]);
-    setStreamingContent("");
-    streamingContentRef.current = "";
-    setIsStreaming(false);
-    setStatus("idle");
-    setStatusMessage("");
-    setIsConnected(false);
-    toolPendingRef.current = false;
-    lastToolMessageId.current = null;
-    pendingMessagesRef.current = [];
-    autoApprovedToolsRef.current.clear();
+      // Clear messages and state when disconnecting
+      setMessages([]);
+      setStreamingContent("");
+      streamingContentRef.current = "";
+      setIsStreaming(false);
+      setStatus("idle");
+      setStatusMessage("");
+      setIsConnected(false);
+      toolPendingRef.current = false;
+      lastToolMessageId.current = null;
+      pendingMessagesRef.current = [];
+      autoApprovedToolsRef.current.clear();
+    });
   }, []);
 
   // Send message to backend
@@ -414,15 +436,22 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
       case "conversation":
         if (msg.role === "assistant") {
           if (msg.isStreaming !== false) {
-            // Streaming chunk - backend sends accumulated content, not deltas
-            const content = msg.content || "";
+            // Streaming chunk - accumulate deltas from backend
+            const chunk = msg.content || "";
             console.log(
-              `[useAIChatBackend:${connectionIdRef.current}] Streaming chunk, content length:`,
-              content.length
+              `[useAIChatBackend:${connectionIdRef.current}] Streaming chunk, chunk length:`,
+              chunk.length
             );
-            setStreamingContent(content);
-            streamingContentRef.current = content;
-            optionsRef.current.onAssistantMessage?.({ content, final: false });
+            setStreamingContent((prev) => {
+              const newContent = prev + chunk;
+              console.log(
+                `[useAIChatBackend:${connectionIdRef.current}] Accumulated length:`,
+                newContent.length
+              );
+              streamingContentRef.current = newContent;
+              optionsRef.current.onAssistantMessage?.({ content: newContent, final: false });
+              return newContent;
+            });
             setIsStreaming(true);
             setStatusMessage(""); // Clear any tool execution messages
           } else {
