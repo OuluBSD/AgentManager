@@ -109,6 +109,7 @@ export function Debug({ sessionToken }: DebugProps) {
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [showContent, setShowContent] = useState(true);
+  const [hideStopped, setHideStopped] = useState(false);
 
   // Fetch processes
   const fetchProcesses = async () => {
@@ -266,8 +267,9 @@ export function Debug({ sessionToken }: DebugProps) {
     }
   };
 
-  const filteredProcesses =
-    grouping === "all" ? processes : processes.filter((p) => p.type === grouping);
+  const filteredProcesses = processes
+    .filter((p) => (grouping === "all" ? true : p.type === grouping))
+    .filter((p) => (hideStopped ? p.status !== "exited" && p.status !== "error" : true));
 
   const formatTimestamp = (ts: string) => {
     const date = new Date(ts);
@@ -422,6 +424,14 @@ export function Debug({ sessionToken }: DebugProps) {
               onChange={(e) => setShowContent(e.target.checked)}
             />
             Show content
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={hideStopped}
+              onChange={(e) => setHideStopped(e.target.checked)}
+            />
+            Hide stopped
           </label>
         </div>
       </div>
