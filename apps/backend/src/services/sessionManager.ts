@@ -78,6 +78,15 @@ class SessionManagerService {
       }
 
       // Reuse existing session - add new message handler
+      // First remove old handler for this connectionId if it exists
+      const oldHandler = existing.messageHandlers.get(connectionId);
+      if (oldHandler && existing.qwenClient && existing.qwenClient.removeMessageHandler) {
+        log.info(
+          `[SessionManager] Removing old handler for connectionId ${connectionId} before adding new one`
+        );
+        existing.qwenClient.removeMessageHandler(oldHandler);
+      }
+
       existing.refCount++;
       existing.reopenCount++;
       existing.lastOpened = new Date();
