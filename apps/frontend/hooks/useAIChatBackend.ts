@@ -240,6 +240,21 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
   const disconnect = useCallback(() => {
     console.log("[useAIChatBackend] disconnect() called, current ws:", wsRef.current?.readyState);
     if (wsRef.current) {
+      // Send disconnect message to backend BEFORE closing to immediately release session
+      // This prevents race condition where old handler isn't removed before new connection adds a new one
+      if (wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(
+            JSON.stringify({
+              type: "disconnect",
+            })
+          );
+          console.log("[useAIChatBackend] Sent disconnect message to backend");
+        } catch (err) {
+          console.error("[useAIChatBackend] Failed to send disconnect message:", err);
+        }
+      }
+
       // Remove event listeners before closing to prevent race conditions
       wsRef.current.onmessage = null;
       wsRef.current.onerror = null;

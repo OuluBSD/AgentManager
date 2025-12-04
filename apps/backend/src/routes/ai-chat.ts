@@ -188,8 +188,28 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
 
       connection.socket.on("message", (data: Buffer) => {
         try {
-          const message = JSON.parse(data.toString()) as QwenCommand;
-          bridge.send(message);
+          const message = JSON.parse(data.toString()) as any;
+
+          // Handle disconnect message - immediately release session
+          if (message.type === "disconnect") {
+            fastify.log.info(
+              `[AIChat] Received disconnect message for session ${sessionId} connectionId=${connectionId}`
+            );
+            sessionManager
+              .releaseSession(sessionId, connectionId, fastify.log)
+              .then(() => {
+                fastify.log.info(
+                  `[AIChat] Session ${sessionId} connectionId=${connectionId} released via disconnect message`
+                );
+              })
+              .catch((err) => {
+                fastify.log.error({ err }, "[AIChat] Error during disconnect message handling");
+              });
+            return;
+          }
+
+          // Forward other messages to bridge
+          bridge.send(message as QwenCommand);
         } catch (err) {
           fastify.log.error(err, "Failed to handle message");
         }
