@@ -50,13 +50,23 @@ function formatToolCall(
   opts?: { autoApproved?: boolean }
 ): { label: string; content: string } {
   const rawLabel = (typeof tool?.tool_name === "string" && tool.tool_name.trim()) || "tool";
-  const label =
-    rawLabel.toLowerCase().includes("shell") || rawLabel.toLowerCase().includes("bash")
-      ? "Shell"
-      : rawLabel;
+  // Replace underscores with spaces and handle special cases
+  let label = rawLabel;
+  if (rawLabel.toLowerCase().includes("shell") || rawLabel.toLowerCase().includes("bash")) {
+    label = "Shell";
+  } else {
+    // Replace underscores with spaces for better readability
+    label = rawLabel.replace(/_/g, " ");
+  }
+
   const requiresApproval =
     tool?.confirmation_details?.requires_approval || tool?.requires_approval || false;
   const args = (tool && typeof tool === "object" && tool.args) || {};
+
+  // Format arguments intelligently
+  let argPreview = "";
+
+  // Handle common command patterns
   const primaryArg =
     typeof args.command === "string"
       ? args.command
@@ -65,17 +75,38 @@ function formatToolCall(
         : typeof args.input === "string"
           ? args.input
           : null;
-  const argPreview =
-    primaryArg ||
-    (args && typeof args === "object" && Object.keys(args).length
-      ? JSON.stringify(args, null, 2)
-      : "");
-  const statusText = tool?.status ? tool.status.toString().toLowerCase() : "";
-  const approvalText = requiresApproval && !opts?.autoApproved ? " (awaiting approval)" : "";
-  const header = statusText ? statusText.charAt(0).toUpperCase() + statusText.slice(1) : "Running";
-  const content = approvalText ? `${header}${approvalText}` : header;
-  const body = argPreview ? `${header}\n${argPreview}` : content;
-  return { label, content: body };
+
+  if (primaryArg) {
+    argPreview = primaryArg;
+  } else if (args && typeof args === "object" && Object.keys(args).length > 0) {
+    // Check for predictable single-key patterns
+    const keys = Object.keys(args);
+    if (keys.length === 1) {
+      const key = keys[0];
+      const value = args[key];
+      if (typeof value === "string") {
+        // Format single key-value pairs nicely
+        argPreview = value;
+      } else {
+        argPreview = JSON.stringify(args, null, 2);
+      }
+    } else {
+      argPreview = JSON.stringify(args, null, 2);
+    }
+  }
+
+  const approvalText = requiresApproval && !opts?.autoApproved ? "(awaiting approval)" : "";
+
+  // Don't show "Running" status - just show args or approval text
+  let content = "";
+  if (approvalText) {
+    content = approvalText;
+  }
+  if (argPreview) {
+    content = content ? `${content}\n${argPreview}` : argPreview;
+  }
+
+  return { label, content: content || "" };
 }
 
 function stripStatus(label: string): string {
