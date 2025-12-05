@@ -170,7 +170,15 @@ class ProcessLoggerService extends EventEmitter {
     if (!process) return;
 
     process.status = "error";
-    process.metadata = { ...process.metadata, error: error.message };
+    process.metadata = {
+      ...process.metadata,
+      error: {
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        timestamp: new Date().toISOString()
+      }
+    };
     this.emit("process:error", { process, error });
     console.error(`[ProcessLogger] Process error: ${process.name} (${id})`, error.message);
   }

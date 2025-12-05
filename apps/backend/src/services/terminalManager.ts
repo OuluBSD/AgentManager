@@ -29,12 +29,16 @@ type ManagedSession = {
 const sessions = new Map<string, ManagedSession>();
 const MAX_BUFFER_SIZE = 1000; // Keep last 1000 chunks
 
-async function resolveWorkingDirectory(projectId?: string, cwd?: string) {
+async function resolveWorkingDirectory(
+  projectId?: string,
+  cwd?: string,
+  workspaceRoot?: string | null
+) {
   if (!projectId) {
     return path.resolve(cwd ?? process.cwd());
   }
 
-  const safe = await resolveWorkspacePath(projectId, cwd ?? ".");
+  const safe = await resolveWorkspacePath(projectId, cwd ?? ".", workspaceRoot);
   if (!safe) return null;
 
   try {
@@ -46,8 +50,12 @@ async function resolveWorkingDirectory(projectId?: string, cwd?: string) {
   return safe.absolutePath;
 }
 
-export async function createTerminalSession(projectId?: string, cwd?: string) {
-  const workingDir = await resolveWorkingDirectory(projectId, cwd);
+export async function createTerminalSession(
+  projectId?: string,
+  cwd?: string,
+  workspaceRoot?: string | null
+) {
+  const workingDir = await resolveWorkingDirectory(projectId, cwd, workspaceRoot);
   if (!workingDir) return null;
 
   // Resolve shell path robustly: prefer $SHELL, otherwise try common locations

@@ -25,7 +25,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const inputPath = (query.path ?? ".").replace(/^\//, "");
-    const safePath = await resolveWorkspacePath(query.projectId, inputPath);
+    const safePath = await resolveWorkspacePath(query.projectId, inputPath, project.contentPath);
     if (!safePath) {
       reply.code(400).send({ error: { code: "bad_path", message: "Invalid path" } });
       return;
@@ -82,7 +82,11 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    const safePath = await resolveWorkspacePath(query.projectId, query.path.replace(/^\//, ""));
+    const safePath = await resolveWorkspacePath(
+      query.projectId,
+      query.path.replace(/^\//, ""),
+      project.contentPath
+    );
     if (!safePath) {
       reply.code(400).send({ error: { code: "bad_path", message: "Invalid path" } });
       return;
@@ -137,7 +141,11 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    const safePath = await resolveWorkspacePath(body.projectId, body.path.replace(/^\//, ""));
+    const safePath = await resolveWorkspacePath(
+      body.projectId,
+      body.path.replace(/^\//, ""),
+      project.contentPath
+    );
     if (!safePath) {
       reply.code(400).send({ error: { code: "bad_path", message: "Invalid path" } });
       return;
@@ -190,7 +198,11 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    const safePath = await resolveWorkspacePath(query.projectId, query.path.replace(/^\//, ""));
+    const safePath = await resolveWorkspacePath(
+      query.projectId,
+      query.path.replace(/^\//, ""),
+      project.contentPath
+    );
     if (!safePath) {
       reply.code(400).send({ error: { code: "bad_path", message: "Invalid path" } });
       return;
@@ -203,7 +215,9 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    const projectRoot = getProjectRoot(query.projectId);
+    const projectRoot = project.contentPath?.trim()
+      ? path.resolve(project.contentPath.trim())
+      : getProjectRoot(query.projectId);
     const relPath = path.relative(projectRoot, safePath.absolutePath);
     const baseSha = query.baseSha;
     const targetSha = query.targetSha ?? "HEAD";

@@ -15,14 +15,26 @@ export function getWorkspaceRoot(projectId: string) {
   return path.join(getProjectRoot(projectId), "workspace");
 }
 
-export async function ensureWorkspaceRoot(projectId: string) {
-  const workspaceRoot = getWorkspaceRoot(projectId);
+function pickWorkspaceRoot(projectId: string, contentPath?: string | null) {
+  const trimmed = contentPath?.trim();
+  if (trimmed) {
+    return path.resolve(trimmed);
+  }
+  return getWorkspaceRoot(projectId);
+}
+
+export async function ensureWorkspaceRoot(projectId: string, contentPath?: string | null) {
+  const workspaceRoot = pickWorkspaceRoot(projectId, contentPath);
   await fs.mkdir(workspaceRoot, { recursive: true });
   return workspaceRoot;
 }
 
-export function sanitizeWorkspacePath(projectId: string, inputPath: string | undefined) {
-  const workspaceRoot = getWorkspaceRoot(projectId);
+export function sanitizeWorkspacePath(
+  projectId: string,
+  inputPath: string | undefined,
+  contentPath?: string | null
+) {
+  const workspaceRoot = pickWorkspaceRoot(projectId, contentPath);
   const normalized = path.normalize(path.join(workspaceRoot, inputPath ?? ""));
   if (!normalized.startsWith(workspaceRoot)) {
     return null;
@@ -30,8 +42,12 @@ export function sanitizeWorkspacePath(projectId: string, inputPath: string | und
   return { workspaceRoot, absolutePath: normalized };
 }
 
-export async function resolveWorkspacePath(projectId: string, inputPath: string | undefined) {
-  const workspaceRoot = await ensureWorkspaceRoot(projectId);
+export async function resolveWorkspacePath(
+  projectId: string,
+  inputPath: string | undefined,
+  contentPath?: string | null
+) {
+  const workspaceRoot = await ensureWorkspaceRoot(projectId, contentPath);
   const normalized = path.normalize(path.join(workspaceRoot, inputPath ?? ""));
   if (!normalized.startsWith(workspaceRoot)) {
     return null;

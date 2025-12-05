@@ -73,9 +73,16 @@ const DEMO_KEYFILE = process.env.NEXT_PUBLIC_DEMO_KEYFILE_TOKEN;
 const PROJECT_STORAGE_KEY = "agentmgr:selectedProject";
 const ROADMAP_STORAGE_KEY = "agentmgr:selectedRoadmap";
 const CHAT_STORAGE_KEY = "agentmgr:selectedChat";
+const CODE_SETTINGS_KEY = "agentmgr:codeSettings";
+const CODE_LAST_PATH_KEY = "agentmgr:codeLastPath";
 const parsedContextLimit = Number(process.env.NEXT_PUBLIC_AI_CONTEXT_LIMIT ?? "");
 const DEFAULT_CONTEXT_LIMIT =
   Number.isFinite(parsedContextLimit) && parsedContextLimit > 0 ? parsedContextLimit : 128000;
+const DEFAULT_CODE_SETTINGS = {
+  showHidden: false,
+  wrapLines: false,
+  rememberLastPath: true,
+};
 
 type ProjectItem = {
   id?: string;
@@ -125,6 +132,8 @@ type TokenUsage = {
   contextRemaining?: number;
   updatedAt: number;
 };
+type CodeSettings = typeof DEFAULT_CODE_SETTINGS;
+type FileTab = { path: string; content: string; draft: string };
 type AuditEvent = {
   id: string;
   eventType: string;
@@ -317,6 +326,42 @@ function messagesEqual(a: MessageItem[], b: MessageItem[]): boolean {
     if (messageKey(a[i]) !== messageKey(b[i])) return false;
   }
   return true;
+}
+
+function loadCodeSettings(): CodeSettings {
+  if (typeof window === "undefined") return DEFAULT_CODE_SETTINGS;
+  try {
+    const raw = localStorage.getItem(CODE_SETTINGS_KEY);
+    if (!raw) return DEFAULT_CODE_SETTINGS;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return DEFAULT_CODE_SETTINGS;
+    return { ...DEFAULT_CODE_SETTINGS, ...parsed };
+  } catch {
+    return DEFAULT_CODE_SETTINGS;
+  }
+}
+
+function loadStoredCodePaths(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(CODE_LAST_PATH_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function pickStoredPath(
+  stored: Record<string, string>,
+  projectId?: string | null,
+  fallback = "."
+): string {
+  if (!stored) return fallback;
+  const projectPath = projectId ? stored[projectId] : null;
+  const base = projectPath || stored._default || fallback;
+  return base || fallback;
 }
 
 const SETTINGS_SECTIONS: { key: SettingsCategory; label: string; detail: string }[] = [
@@ -723,6 +768,27 @@ function readWorkspacePath(meta?: Record<string, unknown> | null) {
   return null;
 }
 
+function deriveFsPathForChat(folderHint: string | null, projectContentPath?: string | null) {
+  if (!folderHint) return null;
+  const hint = folderHint.trim();
+  if (!hint) return null;
+
+  const base = projectContentPath?.trim();
+  if (base) {
+    const baseWithSlash = base.endsWith("/") ? base : `${base}/`;
+    if (hint === base) return ".";
+    if (hint.startsWith(baseWithSlash)) {
+      const relative = hint.slice(baseWithSlash.length);
+      return relative || ".";
+    }
+    if (hint.startsWith("/")) {
+      return null;
+    }
+  }
+
+  return hint;
+}
+
 function readMetadataString(meta: Record<string, unknown> | null | undefined, keys: string[]) {
   if (!meta) return null;
   for (const key of keys) {
@@ -856,6 +922,8 @@ export default function Page() {
     const stored = localStorage.getItem(DETAIL_MODE_KEY);
     return stored === "minimal" ? "minimal" : "expanded";
   });
+  const [codeSettings, setCodeSettings] = useState<CodeSettings>(() => loadCodeSettings());
+  const [codeSettingsOpen, setCodeSettingsOpen] = useState(false);
   const [projectThemePreset, setProjectThemePreset] = useState<ProjectThemePresetKey>("default");
   const [activeTab, setActiveTab] = useState<MainTab>("Chat");
   const [toolsTab, setToolsTab] = useState<"Terminal" | "Code">("Terminal");
@@ -873,8 +941,11 @@ export default function Page() {
   const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
   const terminalSocket = useRef<WebSocket | null>(null);
   const terminalWsCandidatesRef = useRef<string[]>([]);
-  const [fsPath, setFsPath] = useState<string>(".");
-  const [fsEntries, setFsEntries] = useState<FileEntry[]>([]);
+  const [fsPath, setFsPath] = useState<string>(() => pickStoredPath(loadStoredCodePaths()));
+  const [fsTreeData, setFsTreeData] = useState<Record<string, FileEntry[]>>({});
+  const [fsExpandedPaths, setFsExpandedPaths] = useState<string[]>(["."]);
+  const [fsOpenTabs, setFsOpenTabs] = useState<FileTab[]>([]);
+  const [fsLoadingPath, setFsLoadingPath] = useState<string | null>(null);
   const [fsContentPath, setFsContentPath] = useState<string | null>(null);
   const [fsContent, setFsContent] = useState<string>("");
   const [fsDraft, setFsDraft] = useState<string>("");
@@ -1636,6 +1707,11 @@ export default function Page() {
       localStorage.setItem(DETAIL_MODE_KEY, detailMode);
     }
   }, [detailMode]);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(CODE_SETTINGS_KEY, JSON.stringify(codeSettings));
+    }
+  }, [codeSettings]);
   const [projectDraft, setProjectDraft] = useState({
     name: "",
     category: "",
@@ -1723,6 +1799,9 @@ export default function Page() {
   const auditFiltersRef = useRef(auditFilters);
   const auditCursorRef = useRef(auditCursor);
   const fsPathRef = useRef(fsPath);
+  const fsOpenTabsRef = useRef<FileTab[]>([]);
+  const fsTreeDataRef = useRef<Record<string, FileEntry[]>>({});
+  const storedCodePathsRef = useRef<Record<string, string>>(loadStoredCodePaths());
 
   const buildPathFromSelection = useCallback(
     (projectId: string | null, roadmapId: string | null, chatId: string | null) => {
@@ -1769,6 +1848,23 @@ export default function Page() {
   useEffect(() => {
     fsPathRef.current = fsPath;
   }, [fsPath]);
+
+  useEffect(() => {
+    if (!codeSettings.rememberLastPath || typeof window === "undefined") return;
+    const next = { ...storedCodePathsRef.current };
+    const key = selectedProjectId ?? "_default";
+    next[key] = fsPath;
+    storedCodePathsRef.current = next;
+    localStorage.setItem(CODE_LAST_PATH_KEY, JSON.stringify(next));
+  }, [codeSettings.rememberLastPath, fsPath, selectedProjectId]);
+
+  useEffect(() => {
+    fsOpenTabsRef.current = fsOpenTabs;
+  }, [fsOpenTabs]);
+
+  useEffect(() => {
+    fsTreeDataRef.current = fsTreeData;
+  }, [fsTreeData]);
 
   useEffect(() => {
     if (!contextMenu || typeof window === "undefined") return;
@@ -1978,7 +2074,10 @@ export default function Page() {
       setTerminalSessionId(null);
       setTerminalOutput("Connect to stream to see output.");
       setTerminalStatus(null);
-      setFsEntries([]);
+      setFsTreeData({});
+      setFsExpandedPaths(["."]);
+      setFsOpenTabs([]);
+      setFsLoadingPath(null);
       setFsContent("");
       setFsContentPath(null);
       setFsPath(".");
@@ -2915,7 +3014,10 @@ export default function Page() {
         setChatFocusDraft("");
         setChatUpdateMessage(null);
         setAuditProjectId((prev) => (prev === projectRemovalPrompt.project.id ? "" : prev));
-        setFsEntries([]);
+        setFsTreeData({});
+        setFsExpandedPaths(["."]);
+        setFsOpenTabs([]);
+        setFsLoadingPath(null);
         setFsContent("");
         setFsContentPath(null);
         setFsPath(".");
@@ -2981,12 +3083,15 @@ export default function Page() {
     setFsDiffLoaded,
     setFsDiffLoading,
     setFsDraft,
-    setFsEntries,
+    setFsExpandedPaths,
     setFsError,
     setFsLoading,
+    setFsLoadingPath,
+    setFsOpenTabs,
     setFsPath,
     setFsSaveStatus,
     setFsSaving,
+    setFsTreeData,
     setFsTargetSha,
     setFsToast,
     setMetaChats,
@@ -3706,37 +3811,39 @@ export default function Page() {
   };
 
   const loadFsTree = useCallback(
-    async (pathOverride?: string) => {
+    async (pathOverride?: string, options?: { expand?: boolean; reset?: boolean }) => {
       if (!sessionToken || !selectedProjectId) {
         setFsError("Login and select a project to browse files.");
         return;
       }
-      const targetPath = pathOverride ?? fsPathRef.current ?? ".";
+      const targetPath = (pathOverride ?? fsPathRef.current ?? ".").trim() || ".";
       setFsLoading(true);
+      setFsLoadingPath(targetPath);
       setFsError(null);
-      setFsDiff("");
-      setFsDiffError(null);
-      setFsDiffLoaded(false);
-      setFsDiffLoading(false);
-      setFsContent("");
-      setFsContentPath(null);
-      setFsDraft("");
-      setFsSaving(false);
-      setFsSaveStatus(null);
+      if (options?.reset) {
+        setFsTreeData({});
+        setFsExpandedPaths([]);
+      }
       try {
         const tree = await fetchFileTree(sessionToken, selectedProjectId, targetPath);
         const basePath = tree.path || targetPath || ".";
-        // Transform entries to include full paths
         const entriesWithPaths: FileEntry[] = tree.entries.map((entry) => ({
           ...entry,
           path: basePath === "." ? entry.name : `${basePath}/${entry.name}`,
         }));
-        setFsEntries(entriesWithPaths);
+        setFsTreeData((prev) => ({ ...prev, [basePath]: entriesWithPaths }));
         setFsPath(basePath);
+        if (options?.expand !== false) {
+          setFsExpandedPaths((prev) => {
+            const next = new Set(prev);
+            next.add(basePath);
+            return Array.from(next);
+          });
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to load tree";
         setFsError(message);
-        setFsEntries([]);
+        setFsTreeData((prev) => ({ ...prev, [targetPath]: [] }));
         setFsToast({
           message: "File list failed",
           detail: `${targetPath}: ${message}`,
@@ -3744,15 +3851,47 @@ export default function Page() {
         });
       } finally {
         setFsLoading(false);
+        setFsLoadingPath(null);
       }
     },
     [sessionToken, selectedProjectId]
   );
 
+  const expandPathAncestors = useCallback((targetPath: string) => {
+    const normalized = targetPath.trim();
+    const parts = normalized.split("/").filter(Boolean);
+    const ancestors = parts.map((_, idx) => parts.slice(0, idx + 1).join("/"));
+    setFsExpandedPaths((prev) => {
+      const next = new Set(prev);
+      next.add(".");
+      ancestors.forEach((part) => next.add(part));
+      return Array.from(next);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!sessionToken || !selectedProjectId) return;
+    if (!selectedChat || selectedChat.meta) return;
+    const preferredPath = deriveFsPathForChat(folderHint, selectedProject?.contentPath ?? null);
+    if (!preferredPath || fsPathRef.current === preferredPath) return;
+    setFsPath(preferredPath);
+    expandPathAncestors(preferredPath);
+    loadFsTree(preferredPath, { expand: true });
+  }, [
+    expandPathAncestors,
+    folderHint,
+    loadFsTree,
+    selectedChat,
+    selectedProject?.contentPath,
+    selectedProjectId,
+    sessionToken,
+  ]);
+
   const openFolderForChat = useCallback(
     (chat: ChatItem | null) => {
       const resolvedPath = resolveChatFolder(chat);
-      const targetPath = resolvedPath ?? ".";
+      const targetPath =
+        deriveFsPathForChat(resolvedPath ?? ".", selectedProject?.contentPath ?? null) ?? ".";
       handleTabChange("Code", chat?.id ?? selectedChatId);
       if (!sessionToken || !selectedProjectId) {
         setFsToast({
@@ -3763,7 +3902,8 @@ export default function Page() {
         return;
       }
       setFsPath(targetPath);
-      loadFsTree(targetPath);
+      expandPathAncestors(targetPath);
+      loadFsTree(targetPath, { expand: true });
       if (resolvedPath) {
         setFsToast({ message: "Opening folder", detail: targetPath, tone: "success" });
       } else {
@@ -3775,10 +3915,12 @@ export default function Page() {
       }
     },
     [
+      expandPathAncestors,
       handleTabChange,
       loadFsTree,
       resolveChatFolder,
       selectedChatId,
+      selectedProject?.contentPath,
       selectedProjectId,
       sessionToken,
     ]
@@ -3798,13 +3940,28 @@ export default function Page() {
         return;
       }
       setFsLoading(true);
+      setFsLoadingPath(path);
       setFsError(null);
       setFsDiff("");
       setFsDiffError(null);
       setFsDiffLoaded(false);
       setFsDiffLoading(false);
       try {
+        const existing = fsOpenTabsRef.current.find((tab) => tab.path === path);
+        if (existing) {
+          setFsContentPath(existing.path);
+          setFsContent(existing.content);
+          setFsDraft(existing.draft);
+          setFsSaveStatus(null);
+          setFsLoading(false);
+          setFsLoadingPath(null);
+          return;
+        }
         const file = await fetchFileContent(sessionToken, selectedProjectId, path);
+        setFsOpenTabs((prev) => [
+          ...prev,
+          { path: file.path, content: file.content, draft: file.content },
+        ]);
         setFsContentPath(file.path);
         setFsContent(file.content);
         setFsDraft(file.content);
@@ -3818,29 +3975,82 @@ export default function Page() {
         setFsToast({ message: "Open failed", detail: `${path}: ${message}`, tone: "error" });
       } finally {
         setFsLoading(false);
+        setFsLoadingPath(null);
       }
     },
     [sessionToken, selectedProjectId]
   );
 
-  const handleSelectEntry = (entry: FileEntry) => {
-    if (entry.type === "dir") {
-      loadFsTree(entry.path);
-    } else {
-      openFile(entry.path);
-    }
-  };
-
   const goUpDirectory = () => {
-    if (fsPath === "." || fsPath === "") {
-      loadFsTree(".");
+    const current = fsPath.trim() || ".";
+    if (current === ".") {
+      loadFsTree(".", { expand: true });
       return;
     }
-    const parts = fsPath.split("/").filter(Boolean);
+    const parts = current.split("/").filter(Boolean);
     parts.pop();
     const parent = parts.length ? parts.join("/") : ".";
-    loadFsTree(parent);
+    setFsPath(parent);
+    expandPathAncestors(parent);
+    loadFsTree(parent, { expand: true });
   };
+
+  const toggleFsDir = useCallback(
+    (path: string) => {
+      setFsExpandedPaths((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        return Array.from(next);
+      });
+      if (!fsTreeDataRef.current[path]) {
+        loadFsTree(path, { expand: true });
+      }
+    },
+    [loadFsTree]
+  );
+
+  const closeFsTab = useCallback(
+    (path: string) => {
+      setFsOpenTabs((prev) => {
+        const next = prev.filter((tab) => tab.path !== path);
+        if (fsContentPath === path) {
+          const fallback = next[next.length - 1];
+          setFsContentPath(fallback?.path ?? null);
+          setFsContent(fallback?.content ?? "");
+          setFsDraft(fallback?.draft ?? "");
+          setFsSaveStatus(null);
+        }
+        return next;
+      });
+    },
+    [fsContentPath]
+  );
+
+  const activateFsTab = (path: string) => {
+    const tab = fsOpenTabsRef.current.find((item) => item.path === path);
+    if (!tab) return;
+    setFsContentPath(tab.path);
+    setFsContent(tab.content);
+    setFsDraft(tab.draft);
+    setFsSaveStatus(null);
+  };
+
+  const updateActiveDraft = useCallback(
+    (nextDraft: string) => {
+      setFsDraft(nextDraft);
+      if (fsContentPath) {
+        setFsOpenTabs((prev) =>
+          prev.map((tab) => (tab.path === fsContentPath ? { ...tab, draft: nextDraft } : tab))
+        );
+      }
+      setFsSaveStatus(null);
+    },
+    [fsContentPath]
+  );
 
   const loadFsDiff = useCallback(async () => {
     if (!sessionToken || !selectedProjectId || !fsContentPath) {
@@ -3893,6 +4103,11 @@ export default function Page() {
         fsBaseSha.trim() || undefined
       );
       setFsContent(fsDraft);
+      setFsOpenTabs((prev) =>
+        prev.map((tab) =>
+          tab.path === fsContentPath ? { ...tab, content: fsDraft, draft: fsDraft } : tab
+        )
+      );
       setFsSaveStatus("Saved");
       setFsToast({ message: "File saved", detail: fsContentPath, tone: "success" });
     } catch (err) {
@@ -3924,7 +4139,40 @@ export default function Page() {
   }, [fsSaveStatus]);
 
   useEffect(() => {
-    setFsEntries([]);
+    if (!fsContentPath) {
+      if (fsContent || fsDraft) {
+        setFsContent("");
+        setFsDraft("");
+      }
+      return;
+    }
+    const activeTab = fsOpenTabs.find((tab) => tab.path === fsContentPath);
+    if (!activeTab) {
+      const fallback = fsOpenTabs[fsOpenTabs.length - 1];
+      setFsContentPath(fallback?.path ?? null);
+      setFsContent(fallback?.content ?? "");
+      setFsDraft(fallback?.draft ?? "");
+      return;
+    }
+    if (activeTab.content !== fsContent) {
+      setFsContent(activeTab.content);
+    }
+    if (activeTab.draft !== fsDraft) {
+      setFsDraft(activeTab.draft);
+    }
+  }, [fsContent, fsContentPath, fsDraft, fsOpenTabs]);
+
+  useEffect(() => {
+    setFsDiff("");
+    setFsDiffError(null);
+    setFsDiffLoaded(false);
+    setFsDiffLoading(false);
+  }, [fsContentPath]);
+
+  useEffect(() => {
+    setFsTreeData({});
+    setFsExpandedPaths(["."]);
+    setFsOpenTabs([]);
     setFsContent("");
     setFsContentPath(null);
     setFsPath(".");
@@ -3938,10 +4186,16 @@ export default function Page() {
     setFsDiffLoading(false);
     setFsBaseSha("");
     setFsTargetSha("HEAD");
+    const storedPaths = loadStoredCodePaths();
+    storedCodePathsRef.current = storedPaths;
+    const nextPath = codeSettings.rememberLastPath
+      ? pickStoredPath(storedPaths, selectedProjectId)
+      : ".";
+    setFsPath(nextPath);
     if (sessionToken && selectedProjectId) {
-      loadFsTree(".");
+      loadFsTree(nextPath, { expand: true, reset: true });
     }
-  }, [loadFsTree, selectedProjectId, sessionToken]);
+  }, [codeSettings.rememberLastPath, loadFsTree, selectedProjectId, sessionToken]);
 
   useEffect(() => {
     if (!fsToast) return;
@@ -4097,120 +4351,196 @@ export default function Page() {
     }, 50);
   }, [visibleMessages.length, aiStreamingPreview, messagesForChatId]);
 
-  const tabBody = (() => {
-    switch (activeTab) {
-      case "Terminal":
-        return sessionToken && selectedProjectId ? (
-          <Terminal
-            sessionToken={sessionToken}
-            projectId={selectedProjectId}
-            onSessionCreated={(sid) => setTerminalSessionId(sid)}
-            onSessionClosed={() => setTerminalSessionId(null)}
-            autoConnect={autoOpenTerminal}
-          />
-        ) : (
-          <div className="panel-card">
-            <div className="panel-title">Terminal</div>
-            <div className="panel-text">
-              {!sessionToken
-                ? "Please log in to use the terminal."
-                : !selectedProjectId
-                  ? "Select a project to start a terminal session."
-                  : "Loading terminal..."}
-            </div>
+  const renderCodePanel = () => {
+    const activeTab = fsContentPath
+      ? fsOpenTabs.find((tab) => tab.path === fsContentPath)
+      : null;
+    const activeDraft = activeTab ? activeTab.draft : fsDraft;
+    const activeContent = activeTab ? activeTab.content : fsContent;
+    const isDirty = fsContentPath ? activeDraft !== activeContent : false;
+
+    const tabLabel = (path: string) => {
+      const parts = path.split("/").filter(Boolean);
+      return parts[parts.length - 1] || path || "untitled";
+    };
+
+    if (!sessionToken || !selectedProjectId) {
+      return (
+        <div className="panel-card">
+          <div className="panel-title">Code Explorer</div>
+          <div className="panel-text">
+            {!sessionToken
+              ? "Please log in to browse files."
+              : "Select a project to browse workspace files."}
           </div>
-        );
-      case "Code":
-        return (
-          <div className="panel-card">
-            <div className="panel-title">Code Viewer</div>
-            <div className="panel-text">
-              Browse workspace files for the selected project (read-only).
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className="panel-card code-explorer"
+        style={{
+          gap: 12,
+          height: "100%",
+          minHeight: 0,
+          background: "linear-gradient(130deg, rgba(15,23,42,0.9), rgba(11,18,33,0.95))",
+          border: "1px solid #1F2937",
+        }}
+      >
+        <div className="explorer-toolbar">
+          <div>
+            <div className="panel-title" style={{ marginBottom: 2 }}>
+              Code Explorer
             </div>
-            <div className="login-row" style={{ gap: 8, marginBottom: 6 }}>
-              <button className="tab" onClick={goUpDirectory} disabled={fsLoading}>
-                ↑ Up
-              </button>
-              <input
-                className="filter"
-                placeholder="Path"
-                value={fsPath}
-                onChange={(e) => setFsPath(e.target.value)}
-                style={{ flex: 1 }}
-              />
-              <button className="tab" onClick={() => loadFsTree(fsPath)} disabled={fsLoading}>
-                Open
-              </button>
+            <div className="panel-text">Two-pane view with tabs, diffs, and settings.</div>
+          </div>
+          <div className="explorer-toolbar-actions">
+            <button className="ghost" onClick={() => setCodeSettingsOpen((prev) => !prev)}>
+              {codeSettingsOpen ? "Hide Settings" : "Settings"}
+            </button>
+            <button
+              className="ghost"
+              onClick={() => loadFsTree(fsPath, { expand: true })}
+              disabled={fsLoading}
+            >
+              {fsLoading && fsLoadingPath === fsPath ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+        </div>
+        {fsError && (
+          <div className="item-subtle" style={{ color: "#EF4444" }}>
+            {fsError}
+          </div>
+        )}
+        <div className="path-bar">
+          <button className="tab" onClick={goUpDirectory} disabled={fsLoading}>
+            ↑ Up
+          </button>
+          <input
+            className="filter"
+            placeholder="Path"
+            value={fsPath}
+            onChange={(e) => setFsPath(e.target.value)}
+          />
+          <button
+            className="tab"
+            onClick={() => {
+              expandPathAncestors(fsPath);
+              loadFsTree(fsPath, { expand: true });
+            }}
+            disabled={fsLoading}
+          >
+            Open
+          </button>
+        </div>
+        <div className="explorer-split">
+          <div className="explorer-pane">
+            <div className="pane-header">
+              <span className="pane-title">Files</span>
+              <span className="pane-subtle">Sandbox tree</span>
             </div>
-            {fsError && (
-              <div className="item-subtle" style={{ color: "#EF4444" }}>
-                {fsError}
-              </div>
-            )}
             <FileTree
-              entries={fsEntries}
-              currentPath={fsPath}
-              onSelectFile={openFile}
-              onNavigateDir={loadFsTree}
-              loading={fsLoading}
+              rootPath={fsPath}
+              tree={fsTreeData}
+              expandedPaths={fsExpandedPaths}
+              onToggleDir={toggleFsDir}
+              onOpenFile={openFile}
+              onLoadDir={(path) => loadFsTree(path, { expand: true })}
+              loadingPath={fsLoadingPath}
+              activePath={fsContentPath}
+              showHidden={codeSettings.showHidden}
+              className="file-tree"
             />
-            {fsContentPath && (
-              <>
-                <div className="item-subtle" style={{ marginBottom: 6 }}>
-                  {fsContentPath} {fsDraft !== fsContent ? "(unsaved)" : null} {fsSaveStatus}
+          </div>
+          <div className="explorer-content">
+            <div className="code-tab-strip">
+              <span className="panel-text" style={{ margin: 0 }}>
+                Open files
+              </span>
+              <div className="code-tabs">
+                {fsOpenTabs.length === 0 ? (
+                  <span className="item-subtle">No tabs</span>
+                ) : (
+                  fsOpenTabs.map((tab) => {
+                    const dirty = tab.draft !== tab.content;
+                    const active = tab.path === fsContentPath;
+                    return (
+                      <div
+                        key={tab.path}
+                        className="code-tab"
+                        data-active={active}
+                        data-dirty={dirty}
+                      >
+                        <button type="button" onClick={() => activateFsTab(tab.path)}>
+                          {tabLabel(tab.path)}
+                          {dirty ? "*" : ""}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            closeFsTab(tab.path);
+                          }}
+                          title="Close file"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            {fsContentPath ? (
+              <div className="code-workspace">
+                <div className="code-bar">
+                  <div className="item-subtle">
+                    {fsContentPath} {isDirty ? "(unsaved)" : ""} {fsSaveStatus}
+                  </div>
+                  <div className="code-bar-actions">
+                    <button
+                      className="ghost"
+                      onClick={() => updateActiveDraft(activeContent)}
+                      disabled={!isDirty || fsSaving || fsLoading}
+                    >
+                      Reset
+                    </button>
+                    <button
+                      className="tab"
+                      onClick={saveFile}
+                      disabled={
+                        !isDirty || fsSaving || fsLoading || !sessionToken || !selectedProjectId
+                      }
+                    >
+                      {fsSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
                 </div>
-                <CodeViewer
-                  content={fsDraft}
-                  filePath={fsContentPath}
-                  readOnly={false}
-                  onChange={(newContent) => {
-                    setFsDraft(newContent);
-                    setFsSaveStatus(null);
-                  }}
-                />
-                <div className="login-row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                  <button
-                    className="ghost"
-                    onClick={() => setFsDraft(fsContent)}
-                    disabled={fsDraft === fsContent || fsSaving || fsLoading}
-                  >
-                    Reset
-                  </button>
-                  <button
-                    className="tab"
-                    onClick={saveFile}
-                    disabled={
-                      fsDraft === fsContent ||
-                      fsSaving ||
-                      fsLoading ||
-                      !sessionToken ||
-                      !selectedProjectId
-                    }
-                  >
-                    {fsSaving ? "Saving…" : "Save"}
-                  </button>
-                  {fsSaveStatus && <span className="item-subtle">{fsSaveStatus}</span>}
+                <div className="code-view">
+                  <CodeViewer
+                    content={activeDraft}
+                    filePath={fsContentPath}
+                    readOnly={false}
+                    wrapLines={codeSettings.wrapLines}
+                    onChange={(newContent) => updateActiveDraft(newContent)}
+                    fullHeight
+                  />
                 </div>
-                <div className="login-row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                <div className="code-diff-bar">
                   <input
                     className="filter"
                     placeholder="Base SHA (optional)"
                     value={fsBaseSha}
                     onChange={(e) => setFsBaseSha(e.target.value)}
-                    style={{ minWidth: 160 }}
                   />
                   <input
                     className="filter"
                     placeholder="Target (default HEAD)"
                     value={fsTargetSha}
                     onChange={(e) => setFsTargetSha(e.target.value)}
-                    style={{ minWidth: 140 }}
                   />
-                  <button
-                    className="tab"
-                    onClick={loadFsDiff}
-                    disabled={fsDiffLoading || fsLoading}
-                  >
+                  <button className="tab" onClick={loadFsDiff} disabled={fsDiffLoading || fsLoading}>
                     {fsDiffLoading ? "Loading…" : "View Diff"}
                   </button>
                   <button
@@ -4238,10 +4568,103 @@ export default function Page() {
                     targetSha={fsTargetSha.trim() || undefined}
                   />
                 )}
-              </>
+              </div>
+            ) : (
+              <div className="panel-text" style={{ padding: "12px 8px" }}>
+                Select a file from the tree to open it in a tab.
+              </div>
             )}
           </div>
+        </div>
+        {codeSettingsOpen && (
+          <div
+            className="panel-card"
+            style={{
+              marginTop: 12,
+              background: "#0F172A",
+              border: "1px solid #1F2937",
+            }}
+          >
+            <div className="panel-title">Code settings</div>
+            <div className="panel-text">Preferences persist locally for this browser.</div>
+            <div className="settings-stack" style={{ marginTop: 8 }}>
+              <label className="settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={codeSettings.showHidden}
+                  onChange={(e) =>
+                    setCodeSettings((prev) => ({ ...prev, showHidden: e.target.checked }))
+                  }
+                />
+                <div>
+                  <div className="settings-toggle-title">Show hidden files</div>
+                  <div className="settings-toggle-detail">
+                    Display entries starting with a dot in the tree.
+                  </div>
+                </div>
+              </label>
+              <label className="settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={codeSettings.wrapLines}
+                  onChange={(e) =>
+                    setCodeSettings((prev) => ({ ...prev, wrapLines: e.target.checked }))
+                  }
+                />
+                <div>
+                  <div className="settings-toggle-title">Wrap long lines</div>
+                  <div className="settings-toggle-detail">
+                    Avoid horizontal scrolling in the content view.
+                  </div>
+                </div>
+              </label>
+              <label className="settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={codeSettings.rememberLastPath}
+                  onChange={(e) =>
+                    setCodeSettings((prev) => ({ ...prev, rememberLastPath: e.target.checked }))
+                  }
+                />
+                <div>
+                  <div className="settings-toggle-title">Remember last folder</div>
+                  <div className="settings-toggle-detail">
+                    Reopen the previous path for each project automatically.
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const tabBody = (() => {
+    switch (activeTab) {
+      case "Terminal":
+        return sessionToken && selectedProjectId ? (
+          <Terminal
+            sessionToken={sessionToken}
+            projectId={selectedProjectId}
+            onSessionCreated={(sid) => setTerminalSessionId(sid)}
+            onSessionClosed={() => setTerminalSessionId(null)}
+            autoConnect={autoOpenTerminal}
+          />
+        ) : (
+          <div className="panel-card">
+            <div className="panel-title">Terminal</div>
+            <div className="panel-text">
+              {!sessionToken
+                ? "Please log in to use the terminal."
+                : !selectedProjectId
+                  ? "Select a project to start a terminal session."
+                  : "Loading terminal..."}
+            </div>
+          </div>
         );
+      case "Code":
+        return renderCodePanel();
       default:
         if (!selectedChat) {
           return (
@@ -5204,86 +5627,7 @@ export default function Page() {
                       />
                     )
                   ) : toolsTab === "Code" ? (
-                    <div className="panel-card">
-                      <div className="panel-title">Code Viewer</div>
-                      <div className="panel-text">
-                        Browse workspace files for the selected project (read-only).
-                      </div>
-                      <div className="login-row" style={{ gap: 8, marginBottom: 6 }}>
-                        <button className="tab" onClick={goUpDirectory} disabled={fsLoading}>
-                          ↑ Up
-                        </button>
-                        <input
-                          className="filter"
-                          placeholder="Path"
-                          value={fsPath}
-                          onChange={(e) => setFsPath(e.target.value)}
-                          style={{ flex: 1 }}
-                        />
-                        <button
-                          className="tab"
-                          onClick={() => loadFsTree(fsPath)}
-                          disabled={fsLoading}
-                        >
-                          Open
-                        </button>
-                      </div>
-                      {fsError && (
-                        <div className="item-subtle" style={{ color: "#EF4444" }}>
-                          {fsError}
-                        </div>
-                      )}
-                      <FileTree
-                        entries={fsEntries}
-                        currentPath={fsPath}
-                        onSelectFile={openFile}
-                        onNavigateDir={loadFsTree}
-                        loading={fsLoading}
-                      />
-                      {fsContentPath && (
-                        <>
-                          <div className="item-subtle" style={{ marginBottom: 6 }}>
-                            {fsContentPath} {fsDraft !== fsContent ? "(unsaved)" : null}{" "}
-                            {fsSaveStatus}
-                          </div>
-                          <CodeViewer
-                            content={fsDraft}
-                            filePath={fsContentPath}
-                            readOnly={false}
-                            onChange={(newContent) => {
-                              setFsDraft(newContent);
-                              setFsSaveStatus(null);
-                            }}
-                          />
-                          <div
-                            className="login-row"
-                            style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}
-                          >
-                            <button
-                              className="ghost"
-                              onClick={() => setFsDraft(fsContent)}
-                              disabled={fsDraft === fsContent || fsSaving || fsLoading}
-                            >
-                              Reset
-                            </button>
-                            <button
-                              className="tab"
-                              onClick={saveFile}
-                              disabled={
-                                fsDraft === fsContent ||
-                                fsSaving ||
-                                fsLoading ||
-                                !sessionToken ||
-                                !selectedProjectId
-                              }
-                            >
-                              {fsSaving ? "Saving…" : "Save"}
-                            </button>
-                            {fsSaveStatus && <span className="item-subtle">{fsSaveStatus}</span>}
-                          </div>
-                        </>
-                      )}
-                    </div>
+                    renderCodePanel()
                   ) : null}
                 </div>
               </div>

@@ -713,6 +713,46 @@ export function Debug({ sessionToken }: DebugProps) {
                     )}
                   </div>
 
+                  {/* Error Details Section */}
+                  {process.status === "error" && process.metadata?.error && (
+                    <div className="debug-error-details">
+                      <h3>Error Details</h3>
+                      <div className="debug-error-content">
+                        <div className="debug-info-row">
+                          <label>Error Type:</label>
+                          <span className="debug-error-name">
+                            {typeof process.metadata.error === "object"
+                              ? process.metadata.error.name || "Error"
+                              : "Error"}
+                          </span>
+                        </div>
+                        <div className="debug-info-row">
+                          <label>Message:</label>
+                          <span className="debug-error-message">
+                            {typeof process.metadata.error === "object"
+                              ? process.metadata.error.message
+                              : process.metadata.error}
+                          </span>
+                        </div>
+                        {typeof process.metadata.error === "object" &&
+                          process.metadata.error.timestamp && (
+                            <div className="debug-info-row">
+                              <label>Occurred:</label>
+                              <span>
+                                {new Date(process.metadata.error.timestamp).toLocaleString()}
+                              </span>
+                            </div>
+                          )}
+                        {typeof process.metadata.error === "object" && process.metadata.error.stack && (
+                          <div className="debug-error-stack">
+                            <label>Stack Trace:</label>
+                            <pre className="debug-stack-trace">{process.metadata.error.stack}</pre>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="debug-io-logs">
                     <h3>I/O Logs ({ioLogs.length} entries)</h3>
                     {ioTail && (

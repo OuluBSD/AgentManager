@@ -148,8 +148,9 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
     const session = await requireSession(request, reply);
     if (!session) return;
     const body = request.body as { projectId?: string; cwd?: string };
+    let project: Awaited<ReturnType<typeof findProject>> = null;
     if (body?.projectId) {
-      const project = await findProject(fastify, body.projectId);
+      project = await findProject(fastify, body.projectId);
       if (!project) {
         reply.code(404).send({ error: { code: "not_found", message: "Project not found" } });
         return;
@@ -168,7 +169,11 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    const terminal = await createTerminalSession(body?.projectId, body?.cwd);
+    const terminal = await createTerminalSession(
+      body?.projectId,
+      body?.cwd,
+      project?.contentPath ?? null
+    );
     if (!terminal) {
       fastify.log.error(
         `[Terminal] Failed to create terminal session for project ${body?.projectId} in ${body?.cwd || "default cwd"}`

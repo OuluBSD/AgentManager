@@ -29,6 +29,8 @@ type CodeViewerProps = {
   filePath: string;
   readOnly?: boolean;
   onChange?: (content: string) => void;
+  wrapLines?: boolean;
+  fullHeight?: boolean;
 };
 
 function detectLanguage(filePath: string): string | undefined {
@@ -53,7 +55,14 @@ function detectLanguage(filePath: string): string | undefined {
   return ext ? langMap[ext] : undefined;
 }
 
-export function CodeViewer({ content, filePath, readOnly = true, onChange }: CodeViewerProps) {
+export function CodeViewer({
+  content,
+  filePath,
+  readOnly = true,
+  onChange,
+  wrapLines = false,
+  fullHeight = false,
+}: CodeViewerProps) {
   const codeRef = useRef<HTMLElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [mode, setMode] = useState<"view" | "edit">(readOnly ? "view" : "edit");
@@ -77,7 +86,16 @@ export function CodeViewer({ content, filePath, readOnly = true, onChange }: Cod
 
   if (mode === "edit" && !readOnly) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", width: "100%" }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.5rem",
+          width: "100%",
+          height: fullHeight ? "100%" : undefined,
+          minHeight: 0,
+        }}
+      >
         <textarea
           ref={textareaRef}
           className="code-input"
@@ -91,6 +109,8 @@ export function CodeViewer({ content, filePath, readOnly = true, onChange }: Cod
             lineHeight: "1.5",
             whiteSpace: "pre",
             overflowX: "auto",
+            flex: fullHeight ? 1 : undefined,
+            minHeight: fullHeight ? 0 : undefined,
           }}
         />
         <button
@@ -105,8 +125,19 @@ export function CodeViewer({ content, filePath, readOnly = true, onChange }: Cod
     );
   }
 
+  const whiteSpaceMode = wrapLines ? "pre-wrap" : "pre";
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", width: "100%" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.5rem",
+        width: "100%",
+        height: fullHeight ? "100%" : undefined,
+        minHeight: 0,
+      }}
+    >
       <pre
         style={{
           margin: 0,
@@ -114,9 +145,11 @@ export function CodeViewer({ content, filePath, readOnly = true, onChange }: Cod
           background: "#0D1117",
           borderRadius: "4px",
           border: "1px solid #30363D",
-          maxHeight: "500px",
+          maxHeight: fullHeight ? "none" : "500px",
           overflowY: "auto",
-          overflowX: "auto",
+          overflowX: wrapLines ? "hidden" : "auto",
+          flex: fullHeight ? 1 : undefined,
+          minHeight: fullHeight ? 0 : undefined,
         }}
       >
         <code
@@ -127,7 +160,8 @@ export function CodeViewer({ content, filePath, readOnly = true, onChange }: Cod
             fontSize: "0.875rem",
             lineHeight: "1.5",
             display: "block",
-            whiteSpace: "pre",
+            whiteSpace: whiteSpaceMode,
+            wordBreak: wrapLines ? "break-word" : "normal",
           }}
         >
           {content}
