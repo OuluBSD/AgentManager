@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { resolveBackendBase, toWebSocketBase } from "../lib/backendBase";
 
 export interface MetaChatStatus {
   roadmapId: string;
@@ -82,12 +83,12 @@ export function useMetaChatWebSocket({
       }
 
       // Get backend URL from environment variable, matching how other API calls work
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_HTTP_BASE || "http://localhost:3001";
+      const backendUrl = resolveBackendBase();
+      const wsBase = toWebSocketBase(backendUrl);
 
       // Convert HTTP URL to WebSocket URL
       const wsUrl =
-        backendUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:") +
-        `/api/roadmaps/${roadmapId}/meta-chat/stream?token=${encodeURIComponent(sessionToken ?? "")}`;
+        wsBase + `/api/roadmaps/${roadmapId}/meta-chat/stream?token=${encodeURIComponent(sessionToken ?? "")}`;
 
       console.log(`[MetaChatWS] Backend URL: ${backendUrl}`);
       console.log(`[MetaChatWS] WebSocket URL: ${wsUrl}`);

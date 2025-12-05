@@ -478,6 +478,18 @@ export async function dbGetMessages(db: Database, chatId: string): Promise<Messa
   return rows.map(mapMessage);
 }
 
+export async function dbClearMessages(db: Database, chatId: string): Promise<number> {
+  const deleted = await db
+    .delete(schema.messages)
+    .where(eq(schema.messages.chatId, chatId))
+    .returning({ id: schema.messages.id });
+  await db
+    .update(schema.chats)
+    .set({ updatedAt: new Date() })
+    .where(eq(schema.chats.id, chatId));
+  return deleted.length;
+}
+
 export async function dbAddMetaChatMessage(
   db: Database,
   metaChatId: string,

@@ -1,10 +1,6 @@
-const apiBaseEnv = process.env.NEXT_PUBLIC_BACKEND_HTTP_BASE;
-const API_BASE =
-  apiBaseEnv && apiBaseEnv.trim().length
-    ? apiBaseEnv
-    : typeof window !== "undefined"
-      ? window.location.origin
-      : "http://localhost:3001";
+import { resolveBackendBase, toWebSocketBase } from "./backendBase";
+
+const API_BASE = resolveBackendBase();
 
 export type ProjectPayload = {
   id: string;
@@ -262,14 +258,44 @@ export async function createChat(
 export async function fetchChatMessages(
   token: string,
   chatId: string
-): Promise<{ id: string; chatId: string; role: string; content: string; createdAt: string }[]> {
+): Promise<
+  {
+    id: string;
+    chatId: string;
+    role: string;
+    content: string;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+    displayRole?: string;
+  }[]
+> {
   return fetchWithAuth(token, `/api/chats/${chatId}/messages`);
+}
+
+export async function clearChatMessages(
+  token: string,
+  chatId: string
+): Promise<{ removed: number }> {
+  const res = await fetch(`${API_BASE}/api/chats/${chatId}/messages`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to reset chat (${res.status})`);
+  }
+  return res.json();
 }
 
 export async function postChatMessage(
   token: string,
   chatId: string,
-  payload: { role: "user" | "assistant" | "system" | "status" | "meta"; content: string }
+  payload: {
+    role: "user" | "assistant" | "system" | "status" | "meta" | "tool";
+    content: string;
+    metadata?: Record<string, unknown>;
+  }
 ): Promise<{ id: string }> {
   const res = await fetch(`${API_BASE}/api/chats/${chatId}/messages`, {
     method: "POST",
@@ -288,7 +314,17 @@ export async function postChatMessage(
 export async function fetchMetaChatMessages(
   token: string,
   metaChatId: string
-): Promise<{ id: string; metaChatId: string; role: string; content: string; createdAt: string }[]> {
+): Promise<
+  {
+    id: string;
+    metaChatId: string;
+    role: string;
+    content: string;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+    displayRole?: string;
+  }[]
+> {
   return fetchWithAuth(token, `/api/meta-chats/${metaChatId}/messages`);
 }
 
@@ -446,7 +482,7 @@ export async function createTerminalSession(
   token: string,
   projectId?: string,
   cwd?: string
-): Promise<{ sessionId: string }> {
+): Promise<{ sessionId: string; wsCandidates?: string[] }> {
   const res = await fetch(`${API_BASE}/api/terminal/sessions`, {
     method: "POST",
     headers: {
@@ -481,9 +517,93 @@ export async function sendTerminalInput(
 }
 
 export function buildTerminalWsUrl(token: string, sessionId: string) {
-  const wsBase = API_BASE.replace(/^http/, (proto) => (proto === "https" ? "wss" : "ws"));
-  const url = `${wsBase}/api/terminal/sessions/${sessionId}/stream?token=${encodeURIComponent(token)}`;
-  return url;
+  const httpBase = resolveBackendBase();
+  const wsBase = toWebSocketBase(httpBase);
+  const baseUrl = new URL(wsBase);
+
+  // When using the Next dev server proxy (port 3000), WebSockets are not proxied.
+  // If the base matches the current origin, prefer the configured backend port instead.
+  const backendPort = process.env.NEXT_PUBLIC_BACKEND_HTTP_PORT;
+  if (typeof window !== "undefined" && backendPort) {
+    const frontendPort =
+      window.location.port ||
+      (window.location.protocol === "https:" ? "443" : window.location.protocol === "http:" ? "80" : "");
+    if (
+      baseUrl.hostname === window.location.hostname &&
+      baseUrl.port === frontendPort &&
+      backendPort !== frontendPort
+    ) {
+      baseUrl.port = backendPort;
+    }
+  }
+
+  const url = new URL(`/api/terminal/sessions/${sessionId}/stream`, baseUrl);
+  url.searchParams.set("token", token);
+  return url.toString();
+}
+
+export function buildTerminalWsCandidates(
+  token: string,
+  sessionId: string,
+  serverCandidates?: string[]
+): string[] {
+  const candidates = new Set<string>();
+  const isLocalHost = (host: string) =>
+    host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1";
+
+  const addCandidate = (raw: string | undefined | null) => {
+    if (!raw) return;
+    try {
+      const parsed = new URL(raw);
+      const host = parsed.hostname;
+      if (
+        typeof window !== "undefined" &&
+        window.location.hostname &&
+        !isLocalHost(window.location.hostname) &&
+        isLocalHost(host)
+      ) {
+        // Skip localhost when user is on a LAN/remote host
+        return;
+      }
+      candidates.add(parsed.toString());
+    } catch {
+      // ignore invalid base values
+    }
+  };
+
+  (serverCandidates || []).forEach((url) => addCandidate(url?.toString?.() || (url as any)));
+
+  const pushUrl = (base: string, portOverride?: string) => {
+    try {
+      const baseUrl = new URL(toWebSocketBase(base));
+      if (portOverride) {
+        baseUrl.port = portOverride;
+      }
+      const url = new URL(`/api/terminal/sessions/${sessionId}/stream`, baseUrl);
+      url.searchParams.set("token", token);
+      candidates.add(url.toString());
+    } catch {
+      // ignore invalid base values
+    }
+  };
+
+  const httpBase = resolveBackendBase();
+  pushUrl(httpBase);
+
+  if (typeof window !== "undefined") {
+    const backendPort = (process.env.NEXT_PUBLIC_BACKEND_HTTP_PORT || "3001").toString();
+    const windowBase = `${window.location.protocol}//${window.location.hostname}`;
+    pushUrl(`${windowBase}:${backendPort}`, backendPort);
+
+    const windowPort =
+      window.location.port ||
+      (window.location.protocol === "https:" ? "443" : window.location.protocol === "http:" ? "80" : "");
+    if (windowPort && windowPort !== backendPort) {
+      pushUrl(`${windowBase}:${windowPort}`, windowPort);
+    }
+  }
+
+  return Array.from(candidates);
 }
 
 export async function fetchAuditEvents(

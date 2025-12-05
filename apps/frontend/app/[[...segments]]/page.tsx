@@ -13,6 +13,7 @@ import {
   fetchRoadmaps,
   fetchFileDiff,
   fetchChatMessages,
+  clearChatMessages,
   fetchMetaChatMessages,
   createProject,
   createRoadmap,
@@ -51,6 +52,7 @@ import { useMetaChatWebSocket } from "../../hooks/useMetaChatWebSocket";
 import { TopMenuBar, type AppSection } from "../../components/TopMenuBar";
 import { AIChat } from "../../components/AIChat";
 import { Network } from "../../components/Network";
+import { Debug } from "../../components/Debug";
 import { useAIChatBackend } from "../../hooks/useAIChatBackend";
 
 type Status =
@@ -71,6 +73,9 @@ const DEMO_KEYFILE = process.env.NEXT_PUBLIC_DEMO_KEYFILE_TOKEN;
 const PROJECT_STORAGE_KEY = "agentmgr:selectedProject";
 const ROADMAP_STORAGE_KEY = "agentmgr:selectedRoadmap";
 const CHAT_STORAGE_KEY = "agentmgr:selectedChat";
+const parsedContextLimit = Number(process.env.NEXT_PUBLIC_AI_CONTEXT_LIMIT ?? "");
+const DEFAULT_CONTEXT_LIMIT =
+  Number.isFinite(parsedContextLimit) && parsedContextLimit > 0 ? parsedContextLimit : 128000;
 
 type ProjectItem = {
   id?: string;
@@ -107,9 +112,18 @@ type ChatItem = {
 type MessageItem = {
   id: string;
   chatId: string;
-  role: "user" | "assistant" | "system" | "status" | "meta";
+  role: "user" | "assistant" | "system" | "status" | "meta" | "tool";
   content: string;
   createdAt: string;
+  displayRole?: string | null;
+};
+type TokenUsage = {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  contextLimit?: number;
+  contextRemaining?: number;
+  updatedAt: number;
 };
 type AuditEvent = {
   id: string;
@@ -187,6 +201,12 @@ type ContextPanel =
     };
 
 type SettingsCategory = "appearance" | "workspace";
+type ChatSessionStep = {
+  key: string;
+  label: string;
+  status: "pending" | "done" | "error";
+  detail?: string;
+};
 
 const contextActionConfig: Record<ContextTarget, { key: string; label: string }[]> = {
   project: [
@@ -208,21 +228,95 @@ const contextActionConfig: Record<ContextTarget, { key: string; label: string }[
 
 function dedupeMessages(items: MessageItem[]): MessageItem[] {
   const result: MessageItem[] = [];
+  const seen = new Set<string>();
   for (const item of items) {
-    const last = result[result.length - 1];
-    const currentContent = (item.content || "").trim();
-    const lastContent = (last?.content || "").trim();
-    if (
-      last &&
-      last.role === item.role &&
-      last.chatId === item.chatId &&
-      lastContent === currentContent
-    ) {
-      continue;
-    }
+    const key = messageKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
     result.push(item);
   }
   return result;
+}
+
+function messageKey(message: MessageItem): string {
+  const trimmedContent = (message.content || "").trim();
+  const rawDisplay = (message.displayRole || "").trim().toLowerCase();
+  const displaySuffix =
+    !rawDisplay ||
+    rawDisplay === message.role.toLowerCase() ||
+    rawDisplay.includes("stream")
+      ? ""
+      : `|${rawDisplay}`;
+  return `${message.chatId}|${message.role}${displaySuffix}|${trimmedContent}`;
+}
+
+function mergeMessages(existing: MessageItem[], incoming: MessageItem[]): MessageItem[] {
+  const isTempId = (id?: string | null) =>
+    typeof id === "string" && /^(assistant|tool|user)-\d+/.test(id);
+
+  const idMap: Record<string, MessageItem> = {};
+
+  // Add existing messages to map by ID
+  for (const message of existing) {
+    const normalized = {
+      ...message,
+      createdAt: message.createdAt || new Date().toISOString(),
+    };
+    idMap[normalized.id] = normalized;
+  }
+
+  // Add/update with incoming messages (prefer non-temp IDs)
+  for (const message of incoming) {
+    const normalized = {
+      ...message,
+      createdAt: message.createdAt || new Date().toISOString(),
+    };
+    const existing = idMap[normalized.id];
+
+    if (!existing) {
+      // New message, add it
+      idMap[normalized.id] = normalized;
+    } else {
+      // Message exists, prefer non-temp ID
+      const existingIsTemp = isTempId(existing.id);
+      const incomingIsTemp = isTempId(normalized.id);
+
+      if (existingIsTemp && !incomingIsTemp) {
+        // Replace temp with permanent
+        idMap[normalized.id] = normalized;
+      } else if (!existingIsTemp && incomingIsTemp) {
+        // Keep permanent
+        continue;
+      } else {
+        // Both temp or both permanent, keep newer
+        const existingTime = Date.parse(existing.createdAt);
+        const incomingTime = Date.parse(normalized.createdAt);
+        if (
+          (Number.isFinite(incomingTime) ? incomingTime : 0) >=
+          (Number.isFinite(existingTime) ? existingTime : 0)
+        ) {
+          idMap[normalized.id] = normalized;
+        }
+      }
+    }
+  }
+
+  // Sort by timestamp then drop consecutive duplicates
+  const merged = Object.values(idMap).sort((a, b) => {
+    const aTime = Date.parse(a.createdAt);
+    const bTime = Date.parse(b.createdAt);
+    return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
+  });
+
+  return dedupeMessages(merged);
+}
+
+function messagesEqual(a: MessageItem[], b: MessageItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (messageKey(a[i]) !== messageKey(b[i])) return false;
+  }
+  return true;
 }
 
 const SETTINGS_SECTIONS: { key: SettingsCategory; label: string; detail: string }[] = [
@@ -764,13 +858,21 @@ export default function Page() {
   });
   const [projectThemePreset, setProjectThemePreset] = useState<ProjectThemePresetKey>("default");
   const [activeTab, setActiveTab] = useState<MainTab>("Chat");
+  const [toolsTab, setToolsTab] = useState<"Terminal" | "Code">("Terminal");
   const [chatTabState, setChatTabState] = useState<Record<string, MainTab>>({});
   const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
+  const [terminalWsCandidates, setTerminalWsCandidates] = useState<string[]>([]);
+  const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [sidebarHover, setSidebarHover] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(
+    typeof window !== "undefined" ? window.innerWidth : 1920
+  );
   const [terminalOutput, setTerminalOutput] = useState<string>("Connect to stream to see output.");
   const [terminalInput, setTerminalInput] = useState<string>("");
   const [terminalConnecting, setTerminalConnecting] = useState(false);
   const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
   const terminalSocket = useRef<WebSocket | null>(null);
+  const terminalWsCandidatesRef = useRef<string[]>([]);
   const [fsPath, setFsPath] = useState<string>(".");
   const [fsEntries, setFsEntries] = useState<FileEntry[]>([]);
   const [fsContentPath, setFsContentPath] = useState<string | null>(null);
@@ -794,10 +896,21 @@ export default function Page() {
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
+  const [messagesForChatId, setMessagesForChatId] = useState<string | null>(null);
+  const [messageCache, setMessageCache] = useState<Record<string, MessageItem[]>>({});
+  const [chatSessionState, setChatSessionState] = useState<
+    "idle" | "hydrating" | "ready" | "error"
+  >("idle");
+  const [chatHydrationTrigger, setChatHydrationTrigger] = useState(0);
+  const [chatSessionError, setChatSessionError] = useState<string | null>(null);
+  const [chatSessionSteps, setChatSessionSteps] = useState<ChatSessionStep[]>([]);
+  const [chatSessionNonces, setChatSessionNonces] = useState<Record<string, number>>({});
+  const [chatTokenUsage, setChatTokenUsage] = useState<Record<string, TokenUsage>>({});
+  const [resettingChatSession, setResettingChatSession] = useState(false);
   const [messageDraft, setMessageDraft] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
   const [messageFilter, setMessageFilter] = useState<
-    "all" | "user" | "assistant" | "system" | "status" | "meta"
+    "all" | "user" | "assistant" | "system" | "status" | "meta" | "tool"
   >("all");
   const [slashSuggestions, setSlashSuggestions] = useState<
     ReturnType<typeof getSlashCommandSuggestions>
@@ -809,7 +922,35 @@ export default function Page() {
     chatId: null,
     content: null,
   });
+  const toolMessageMapRef = useRef<Record<number, string>>({});
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const messagesRef = useRef<MessageItem[]>([]);
+  const messagesLoadingRef = useRef(false);
+  const messagesForChatRef = useRef<string | null>(null);
+  const messageCacheRef = useRef<Record<string, MessageItem[]>>({});
+  const isChatAiConnectedRef = useRef(false);
+  const chatHydrationRunIdRef = useRef(0);
+  const aiSessionResumeRef = useRef<Record<string, { hydratedAt: number }>>({});
+  const persistedToolMessagesRef = useRef<Set<string>>(new Set());
+  const updateChatSessionStep = useCallback((key: string, patch: Partial<ChatSessionStep>) => {
+    setChatSessionSteps((prev) => {
+      const existingIndex = prev.findIndex((item) => item.key === key);
+      if (existingIndex >= 0) {
+        const next = [...prev];
+        next[existingIndex] = { ...next[existingIndex], ...patch };
+        return next;
+      }
+      return [
+        ...prev,
+        {
+          key,
+          label: patch.label ?? key,
+          status: patch.status ?? "pending",
+          detail: patch.detail,
+        },
+      ];
+    });
+  }, []);
   const [chatStatusDraft, setChatStatusDraft] = useState<Status>("in_progress");
   const [chatProgressDraft, setChatProgressDraft] = useState<string>("0");
   const [chatFocusDraft, setChatFocusDraft] = useState("");
@@ -859,6 +1000,7 @@ export default function Page() {
     [resolvedGlobalThemeMode, selectedProject?.theme]
   );
   const selectedChat = chats.find((c) => c.id === selectedChatId);
+  const chatSessionNonce = selectedChatId ? (chatSessionNonces[selectedChatId] ?? 0) : 0;
   const isMetaChatSelected = selectedChat?.meta;
   const templateForChat = selectedChat?.templateId
     ? templates.find((t) => t.id === selectedChat.templateId)
@@ -878,10 +1020,11 @@ export default function Page() {
     connect: connectChatAi,
     disconnect: disconnectChatAi,
     sendMessage: sendChatAiMessage,
+    sendBackgroundMessage: sendChatAiBackground,
     isConnected: isChatAiConnected,
   } = useAIChatBackend({
     backend: "qwen",
-    sessionId: selectedChatId ? `chat-${selectedChatId}` : "agent-manager",
+    sessionId: selectedChatId ? `chat-${selectedChatId}-n${chatSessionNonce}` : "agent-manager",
     token: sessionToken ?? "",
     allowChallenge: false,
     workspacePath: resolvedChatWorkspacePath || undefined,
@@ -946,6 +1089,110 @@ export default function Page() {
         setMessagesError(message);
       }
     },
+    onInfo: ({ message }) => {
+      if (!selectedChatId) return;
+      if (message) {
+        updateChatSessionStep("connect", { detail: message });
+      }
+    },
+    onCompletionStats: (stats) => {
+      if (!selectedChatId || selectedChatId.startsWith("meta-")) return;
+      const limit =
+        stats.contextLimit && stats.contextLimit > 0 ? stats.contextLimit : DEFAULT_CONTEXT_LIMIT;
+      const total =
+        stats.totalTokens ??
+        (stats.promptTokens !== undefined || stats.completionTokens !== undefined
+          ? (stats.promptTokens ?? 0) + (stats.completionTokens ?? 0)
+          : undefined);
+      const remaining =
+        stats.contextRemaining !== undefined
+          ? stats.contextRemaining
+          : limit && total !== undefined
+            ? Math.max(limit - total, 0)
+            : undefined;
+      setChatTokenUsage((prev) => ({
+        ...prev,
+        [selectedChatId]: {
+          promptTokens: stats.promptTokens,
+          completionTokens: stats.completionTokens,
+          totalTokens: total,
+          contextLimit: limit || undefined,
+          contextRemaining: remaining,
+          updatedAt: Date.now(),
+        },
+      }));
+    },
+    onToolMessage: ({ content, displayRole, messageId }) => {
+      if (!selectedChatId || selectedChatId.startsWith("meta-")) return;
+      const resolvedContent = content && content.trim() ? content : "(tool running)";
+      const baseId =
+        typeof messageId === "number"
+          ? (toolMessageMapRef.current[messageId] ??
+            (toolMessageMapRef.current[messageId] = `tool-${messageId}`))
+          : `tool-${Date.now()}`;
+      const persistKey = `${selectedChatId}:${baseId}`;
+      const alreadyPersisted = persistedToolMessagesRef.current.has(persistKey);
+      const createdAt = new Date().toISOString();
+      let shouldPersist = false;
+      setMessages((prev) => {
+        const next: MessageItem = {
+          id: baseId,
+          chatId: selectedChatId,
+          role: "tool",
+          content: resolvedContent,
+          createdAt,
+          displayRole: displayRole ?? "tool",
+        };
+        const existingIndex = prev.findIndex((m) => m.id === baseId);
+        if (existingIndex >= 0) {
+          const updated = [...prev];
+          updated[existingIndex] = { ...updated[existingIndex], ...next };
+          return dedupeMessages(updated);
+        }
+        shouldPersist = true;
+        return dedupeMessages([...prev, next]);
+      });
+      console.log("[onToolMessage] Persistence check:", {
+        shouldPersist,
+        hasSessionToken: !!sessionToken,
+        alreadyPersisted,
+        persistKey,
+        baseId,
+        displayRole,
+        messageId,
+      });
+
+      if (shouldPersist && sessionToken && !alreadyPersisted) {
+        console.log("[onToolMessage] Persisting tool message:", {
+          chatId: selectedChatId,
+          role: "tool",
+          content: resolvedContent,
+          metadata: displayRole ? { displayRole } : undefined,
+        });
+
+        postChatMessage(sessionToken, selectedChatId, {
+          role: "tool",
+          content: resolvedContent,
+          metadata: displayRole ? { displayRole } : undefined,
+        })
+          .then((result) => {
+            console.log("[onToolMessage] Successfully persisted tool message:", result);
+            persistedToolMessagesRef.current.add(persistKey);
+          })
+          .catch((err) => {
+            console.error("[onToolMessage] Failed to persist tool message:", err);
+            setMessagesError(err instanceof Error ? err.message : "Failed to persist tool message");
+          });
+      } else {
+        console.log("[onToolMessage] Skipping persistence:", {
+          reason: !shouldPersist
+            ? "message already exists"
+            : !sessionToken
+              ? "no session token"
+              : "already persisted",
+        });
+      }
+    },
   });
   const [autoDemoAiEnabled, setAutoDemoAiEnabled] = useState(false);
   const [autoDemoKickoffSent, setAutoDemoKickoffSent] = useState(false);
@@ -977,6 +1224,38 @@ export default function Page() {
     }
   }, [messages]);
 
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    messagesLoadingRef.current = messagesLoading;
+  }, [messagesLoading]);
+
+  useEffect(() => {
+    messagesForChatRef.current = messagesForChatId;
+  }, [messagesForChatId]);
+
+  useEffect(() => {
+    messageCacheRef.current = messageCache;
+  }, [messageCache]);
+
+  useEffect(() => {
+    if (!messagesForChatId) return;
+    setMessageCache((prev) => {
+      const cached = prev[messagesForChatId] ?? [];
+      const merged = mergeMessages(cached, messages);
+      if (messagesEqual(cached, merged)) return prev;
+      const next = { ...prev, [messagesForChatId]: merged };
+      messageCacheRef.current = next;
+      return next;
+    });
+  }, [messages, messagesForChatId]);
+
+  useEffect(() => {
+    isChatAiConnectedRef.current = isChatAiConnected;
+  }, [isChatAiConnected]);
+
   const isAutoDemoChat =
     !!selectedChat &&
     (readWorkspacePath(selectedChat.metadata) === autoDemoWorkspace.path ||
@@ -984,7 +1263,12 @@ export default function Page() {
       repoHint === autoDemoWorkspace.repo);
 
   useEffect(() => {
-    if (!sessionToken || !selectedChatId || selectedChatId.startsWith("meta-")) {
+    if (
+      !sessionToken ||
+      !selectedChatId ||
+      selectedChatId.startsWith("meta-") ||
+      selectedChat?.meta
+    ) {
       setAiStreamingPreview("");
       disconnectChatAi();
       return;
@@ -993,7 +1277,14 @@ export default function Page() {
     return () => {
       disconnectChatAi();
     };
-  }, [connectChatAi, disconnectChatAi, selectedChatId, sessionToken]);
+  }, [
+    chatSessionNonce,
+    connectChatAi,
+    disconnectChatAi,
+    selectedChat?.meta,
+    selectedChatId,
+    sessionToken,
+  ]);
 
   useEffect(() => {
     if (autoDemoAiEnabled && sessionToken) {
@@ -1020,6 +1311,116 @@ export default function Page() {
     }
   }, [autoDemoAiEnabled, disconnectAutoDemo, isAutoDemoChat]);
 
+  // Window resize handler for responsive splitter
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Home key handler for sidebar toggle
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Home" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const target = e.target as HTMLElement;
+        // Don't toggle if user is typing in an input
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+        e.preventDefault();
+        setSidebarVisible((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const loadMessagesForChat = useCallback(
+    async (chatId: string, token: string) => {
+      if (!chatId) {
+        setMessages([]);
+        setMessagesError("Select a chat to load messages.");
+        setMessagesForChatId(null);
+        return;
+      }
+      setMessagesLoading(true);
+      setMessagesError(null);
+      try {
+        if (chatId.startsWith("meta-")) {
+          // Load meta-chat messages
+          const metaChatId = chatId.replace("meta-", "");
+          const metaChat = Object.values(metaChats).find((mc) => mc.roadmapListId === metaChatId);
+          if (metaChat) {
+            const items = await fetchMetaChatMessages(token, metaChat.id);
+            const mapped = items.map((m) => ({
+              ...m,
+              chatId: m.metaChatId,
+              displayRole:
+                m.displayRole ??
+                (typeof (m as any)?.metadata?.displayRole === "string"
+                  ? ((m as any).metadata!.displayRole as string)
+                  : undefined),
+            })) as MessageItem[];
+            const merged = mergeMessages(messageCacheRef.current[chatId] ?? [], mapped);
+            setMessages(merged);
+            setMessagesForChatId(chatId);
+            setMessageCache((prev) => {
+              const next = { ...prev, [chatId]: merged };
+              messageCacheRef.current = next;
+              return next;
+            });
+          } else {
+            setMessages([]);
+            setMessagesError("Meta-chat not found");
+            setMessagesForChatId(null);
+          }
+        } else {
+          // Load regular chat messages
+          const items = await fetchChatMessages(token, chatId);
+          console.log(`[loadMessagesForChat] Fetched ${items.length} messages for chat ${chatId}`);
+          console.log("[loadMessagesForChat] Raw messages from API:", items);
+
+          const mapped = (items as MessageItem[]).map((m) => ({
+            ...m,
+            displayRole:
+              m.displayRole ??
+              (typeof (m as any)?.metadata?.displayRole === "string"
+                ? ((m as any).metadata!.displayRole as string)
+                : undefined),
+          }));
+
+          console.log("[loadMessagesForChat] Mapped messages with displayRole:", mapped);
+
+          const merged = mergeMessages(messageCacheRef.current[chatId] ?? [], mapped);
+          setMessages(merged);
+          setMessagesForChatId(chatId);
+          setMessageCache((prev) => {
+            const next = { ...prev, [chatId]: merged };
+            messageCacheRef.current = next;
+            return next;
+          });
+        }
+      } catch (err) {
+        setMessagesError(err instanceof Error ? err.message : "Failed to load messages");
+        setMessages([]);
+        setMessagesForChatId(null);
+      } finally {
+        setMessagesLoading(false);
+      }
+    },
+    [metaChats]
+  );
+
+  const waitForCondition = useCallback(
+    async (check: () => boolean, timeoutMs = 10000, intervalMs = 150) => {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        if (check()) return true;
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+      return false;
+    },
+    []
+  );
+
   useEffect(() => {
     if (!autoDemoAiEnabled || autoDemoKickoffSent) return;
     if (isAutoDemoConnected) {
@@ -1030,6 +1431,121 @@ export default function Page() {
       setAutoDemoLog("Sent kickoff to qwen: generate+run calc script.");
     }
   }, [autoDemoAiEnabled, autoDemoKickoffSent, isAutoDemoConnected, sendAutoDemoMessage]);
+
+  // Hydrate AI session when switching chats (show loader and optionally replay history)
+  useEffect(() => {
+    const chatId = selectedChatId;
+    const isMeta = !!selectedChat?.meta;
+    if (!sessionToken || !chatId || isMeta) {
+      setChatSessionState("ready");
+      setChatSessionSteps([]);
+      setChatSessionError(null);
+      return;
+    }
+
+    const runId = ++chatHydrationRunIdRef.current;
+    setChatSessionState("hydrating");
+    setChatSessionError(null);
+    setChatSessionSteps([
+      { key: "open", label: "Opening chat", status: "done" },
+      { key: "connect", label: "Connecting to AI server", status: "pending" },
+      { key: "session", label: "Checking for previous session", status: "pending" },
+      { key: "history", label: "Loading chat history", status: "pending" },
+      { key: "push", label: "Pushing history to AI", status: "pending" },
+    ]);
+
+    const hydrate = async () => {
+      try {
+        updateChatSessionStep("connect", { status: "pending", detail: "Opening socket…" });
+        connectChatAi();
+        const connected = await waitForCondition(
+          () => runId === chatHydrationRunIdRef.current && isChatAiConnectedRef.current,
+          8000,
+          150
+        );
+        if (runId !== chatHydrationRunIdRef.current) return;
+        if (!connected) {
+          throw new Error("AI server did not connect in time");
+        }
+        updateChatSessionStep("connect", { status: "done", detail: "Connected" });
+
+        const previousSession = aiSessionResumeRef.current[chatId];
+        updateChatSessionStep("session", {
+          status: "done",
+          detail: previousSession ? "Found live session" : "No prior session",
+        });
+
+        if (messagesForChatRef.current !== chatId) {
+          updateChatSessionStep("history", { status: "pending", detail: "Loading messages…" });
+          await loadMessagesForChat(chatId, sessionToken);
+        } else if (messagesLoadingRef.current) {
+          updateChatSessionStep("history", { status: "pending", detail: "Waiting for messages…" });
+          await waitForCondition(
+            () =>
+              runId === chatHydrationRunIdRef.current &&
+              !messagesLoadingRef.current &&
+              messagesForChatRef.current === chatId,
+            10000,
+            150
+          );
+        }
+
+        if (runId !== chatHydrationRunIdRef.current) return;
+        updateChatSessionStep("history", { status: "done", detail: "Messages ready" });
+
+        if (previousSession) {
+          updateChatSessionStep("push", {
+            status: "done",
+            detail: "Session restored; no replay needed",
+          });
+        } else {
+          const historyMessages = messagesRef.current
+            .filter((m) => m.chatId === chatId && m.role !== "status")
+            .slice(-20);
+          if (historyMessages.length === 0) {
+            updateChatSessionStep("push", { status: "done", detail: "No history to push" });
+          } else {
+            const payload =
+              "Restoring previous chat history. Keep for context; no reply needed until the user asks something new.\n\n" +
+              historyMessages
+                .map((m) => `${m.role}: ${m.content}`)
+                .join("\n\n")
+                .slice(0, 4000);
+            sendChatAiBackground(payload);
+            updateChatSessionStep("push", {
+              status: "done",
+              detail: `Pushed ${historyMessages.length} messages`,
+            });
+          }
+        }
+
+        aiSessionResumeRef.current[chatId] = { hydratedAt: Date.now() };
+        if (runId === chatHydrationRunIdRef.current) {
+          setChatSessionState("ready");
+        }
+      } catch (err) {
+        if (runId !== chatHydrationRunIdRef.current) return;
+        updateChatSessionStep("push", { status: "error" });
+        updateChatSessionStep("history", { status: "error" });
+        updateChatSessionStep("connect", { status: "error" });
+        setChatSessionState("error");
+        setChatSessionError(err instanceof Error ? err.message : "Failed to prepare chat");
+      }
+    };
+
+    hydrate();
+  }, [
+    connectChatAi,
+    loadMessagesForChat,
+    chatHydrationTrigger,
+    chatSessionNonce,
+    selectedChat?.meta,
+    selectedChatId,
+    sendChatAiBackground,
+    sessionToken,
+    updateChatSessionStep,
+    waitForCondition,
+  ]);
 
   const rememberTabForChat = useCallback((tab: MainTab, chatId?: string | null) => {
     if (!chatId) return;
@@ -1434,43 +1950,6 @@ export default function Page() {
     }
   }, []);
 
-  const loadMessagesForChat = useCallback(
-    async (chatId: string, token: string) => {
-      if (!chatId) {
-        setMessages([]);
-        setMessagesError("Select a chat to load messages.");
-        return;
-      }
-      setMessagesLoading(true);
-      setMessagesError(null);
-      try {
-        if (chatId.startsWith("meta-")) {
-          // Load meta-chat messages
-          const metaChatId = chatId.replace("meta-", "");
-          const metaChat = Object.values(metaChats).find((mc) => mc.roadmapListId === metaChatId);
-          if (metaChat) {
-            const items = await fetchMetaChatMessages(token, metaChat.id);
-            const mapped = items.map((m) => ({ ...m, chatId: m.metaChatId })) as MessageItem[];
-            setMessages(dedupeMessages(mapped));
-          } else {
-            setMessages([]);
-            setMessagesError("Meta-chat not found");
-          }
-        } else {
-          // Load regular chat messages
-          const items = await fetchChatMessages(token, chatId);
-          setMessages(dedupeMessages(items as MessageItem[]));
-        }
-      } catch (err) {
-        setMessagesError(err instanceof Error ? err.message : "Failed to load messages");
-        setMessages([]);
-      } finally {
-        setMessagesLoading(false);
-      }
-    },
-    [metaChats]
-  );
-
   const clearWorkspaceState = useCallback(
     (reason?: string) => {
       if (reason) setStatusMessage(reason);
@@ -1519,8 +1998,16 @@ export default function Page() {
       setCreatingRoadmap(false);
       setCreatingChat(false);
       setMessages([]);
+      setMessageCache({});
+      messageCacheRef.current = {};
       setMessagesError(null);
+      setMessagesForChatId(null);
       setMessageDraft("");
+      setChatSessionState("idle");
+      setChatHydrationTrigger(0);
+      setChatSessionSteps([]);
+      setChatSessionError(null);
+      aiSessionResumeRef.current = {};
       setChatProgressDraft("0");
       setChatStatusDraft("in_progress");
       setChatFocusDraft("");
@@ -1914,6 +2401,24 @@ export default function Page() {
       setSelectedChatId(chat.id);
       setMessagesError(null);
       setMessageDraft("");
+      const cachedMessages = messageCacheRef.current[chat.id];
+      if (cachedMessages) {
+        setMessages(cachedMessages);
+        setMessagesForChatId(chat.id);
+      } else {
+        setMessages([]);
+        setMessagesForChatId(null);
+      }
+      setChatHydrationTrigger((prev) => prev + 1);
+      setChatSessionState("hydrating");
+      setChatSessionError(null);
+      setChatSessionSteps([
+        { key: "open", label: "Opening chat", status: "pending" },
+        { key: "connect", label: "Connecting to AI server", status: "pending" },
+        { key: "session", label: "Checking for previous session", status: "pending" },
+        { key: "history", label: "Loading chat history", status: "pending" },
+        { key: "push", label: "Pushing history to AI", status: "pending" },
+      ]);
       if (selectedRoadmapId) {
         persistChatSelection(selectedRoadmapId, chat.id);
       }
@@ -2800,6 +3305,10 @@ export default function Page() {
       setMessagesError("Select a chat to send a message.");
       return;
     }
+    if (chatSessionState !== "ready") {
+      setMessagesError("Chat session is still preparing; please wait.");
+      return;
+    }
     const content = messageDraft.trim();
     if (!content) return;
 
@@ -2890,6 +3399,7 @@ export default function Page() {
     connectChatAi,
     sendChatAiMessage,
     isMetaChatSelected,
+    chatSessionState,
   ]);
 
   // Update slash command suggestions when message draft changes
@@ -2904,6 +3414,51 @@ export default function Page() {
     setSlashSuggestions([]);
     messageInputRef.current?.focus();
   }, []);
+
+  const handleResetChatSession = useCallback(async () => {
+    if (!sessionToken || !selectedChatId) {
+      setMessagesError("Select a chat to reset the session.");
+      return;
+    }
+    if (selectedChatId.startsWith("meta-")) {
+      setMessagesError("Meta-chat session resets are not available.");
+      return;
+    }
+    setResettingChatSession(true);
+    setChatSessionError(null);
+    setChatSessionSteps([]);
+    try {
+      await clearChatMessages(sessionToken, selectedChatId);
+      disconnectChatAi();
+      delete aiSessionResumeRef.current[selectedChatId];
+      setChatSessionNonces((prev) => ({
+        ...prev,
+        [selectedChatId]: (prev[selectedChatId] ?? 0) + 1,
+      }));
+      setMessages([]);
+      setMessageCache((prev) => {
+        const next = { ...prev };
+        delete next[selectedChatId];
+        messageCacheRef.current = next;
+        return next;
+      });
+      messagesRef.current = [];
+      setMessagesForChatId(selectedChatId);
+      messagesForChatRef.current = selectedChatId;
+      setChatTokenUsage((prev) => {
+        const next = { ...prev };
+        delete next[selectedChatId];
+        return next;
+      });
+      setStatusMessage("Chat session reset. Preparing a fresh AI session…");
+      await loadMessagesForChat(selectedChatId, sessionToken);
+      setChatHydrationTrigger((prev) => prev + 1);
+    } catch (err) {
+      setMessagesError(err instanceof Error ? err.message : "Failed to reset chat session");
+    } finally {
+      setResettingChatSession(false);
+    }
+  }, [disconnectChatAi, loadMessagesForChat, selectedChatId, sessionToken, setChatSessionNonces]);
 
   const handleUpdateChatStatus = useCallback(
     async (override?: { status?: Status; progressPercent?: number; focus?: string }) => {
@@ -2985,7 +3540,7 @@ export default function Page() {
     }
   }, [loadMessagesForChat, selectedChatId, sessionToken]);
 
-  const connectTerminalStream = (sessionId: string, token: string) => {
+  const connectTerminalStream = (sessionId: string, token: string, serverCandidates?: string[]) => {
     if (!sessionId || !token) return;
     if (terminalSocket.current) {
       terminalSocket.current.close();
@@ -2994,61 +3549,115 @@ export default function Page() {
     setTerminalConnecting(true);
     setTerminalStatus("Connecting to terminal…");
     setTerminalOutput("Connecting to terminal…\n");
-    const ws = new WebSocket(buildTerminalWsUrl(token, sessionId));
-    terminalSocket.current = ws;
 
-    ws.onopen = () => {
-      setTerminalConnecting(false);
-      setTerminalStatus(`Connected to session ${sessionId}`);
-      setTerminalOutput((prev) => `${prev}[connected to ${sessionId}]\n`);
-    };
-
-    ws.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        setTerminalOutput((prev) => `${prev}${event.data}`);
-        updateTerminalStatusFromText(event.data);
-      } else if (event.data instanceof Blob) {
-        event.data.text().then((text) => {
-          setTerminalOutput((prev) => `${prev}${text}`);
-          updateTerminalStatusFromText(text);
-        });
-      } else if (event.data instanceof ArrayBuffer) {
-        const text = new TextDecoder().decode(new Uint8Array(event.data));
-        setTerminalOutput((prev) => `${prev}${text}`);
-        updateTerminalStatusFromText(text);
+    const decodePayload = async (data: unknown): Promise<string | null> => {
+      if (typeof data === "string") return data;
+      if (data instanceof ArrayBuffer) {
+        return new TextDecoder().decode(data);
       }
+      if (typeof Blob !== "undefined" && data instanceof Blob) {
+        try {
+          const buffer = await data.arrayBuffer();
+          return new TextDecoder().decode(buffer);
+        } catch {
+          return null;
+        }
+      }
+      return null;
     };
 
-    ws.onerror = (event) => {
-      const message = (event as ErrorEvent)?.message ?? "socket error";
-      setTerminalOutput((prev) => `${prev}\n[stream error: ${message}]\n`);
-      setTerminalConnecting(false);
-      setTerminalStatus(`Stream error: ${message}`);
-    };
-    ws.onclose = (event) => {
-      setTerminalConnecting(false);
-      const reason =
-        event.reason ||
-        (event.code === 1008 ? "unauthorized" : event.code === 1006 ? "abnormal closure" : "");
-      if (event.code === 1008) {
-        setStatusMessage("Terminal auth failed. Try logging in again.");
-        setTerminalSessionId(null);
+    const candidateList = buildTerminalWsCandidates(token, sessionId, serverCandidates);
+
+    const tryCandidate = (index: number) => {
+      const targetUrl = candidateList[index];
+      if (!targetUrl) {
+        setTerminalConnecting(false);
+        setTerminalStatus("Failed to connect to terminal stream");
+        return;
       }
-      setTerminalOutput(
-        (prev) => `${prev}\n[stream closed (${event.code}${reason ? `: ${reason}` : ""})]\n`
-      );
-      const idleClosed = reason === "idle timeout" || event.code === 4000;
-      if (idleClosed) {
-        setTerminalStatus((prev) => prev ?? "Closed after idle timeout");
-      } else {
-        const summary = reason
-          ? `Stream closed (${reason})`
-          : event.code
-            ? `Stream closed (code ${event.code})`
-            : "Stream closed.";
-        setTerminalStatus((prev) => prev ?? summary);
-      }
+
+      const ws = new WebSocket(targetUrl);
+      ws.binaryType = "arraybuffer";
+      terminalSocket.current = ws;
+      let opened = false;
+
+      const handleEarlyFailure = () => {
+        if (terminalSocket.current !== ws || opened) return;
+        ws.close();
+        if (terminalSocket.current === ws) {
+          terminalSocket.current = null;
+        }
+        tryCandidate(index + 1);
+      };
+
+      ws.onopen = () => {
+        opened = true;
+        setTerminalConnecting(false);
+        setTerminalStatus(`Connected to session ${sessionId}`);
+        setTerminalOutput((prev) => `${prev}[connected to ${sessionId}]\n`);
+      };
+
+      ws.onmessage = (event) => {
+        const maybePromise = decodePayload(event.data);
+        if (maybePromise instanceof Promise) {
+          maybePromise.then((text) => {
+            if (text != null) {
+              setTerminalOutput((prev) => `${prev}${text}`);
+              updateTerminalStatusFromText(text);
+            }
+          });
+        } else if (maybePromise != null) {
+          setTerminalOutput((prev) => `${prev}${maybePromise}`);
+          updateTerminalStatusFromText(maybePromise);
+        }
+      };
+
+      ws.onerror = (event) => {
+        if (!opened) {
+          handleEarlyFailure();
+          return;
+        }
+        const message = (event as ErrorEvent)?.message ?? "socket error";
+        setTerminalOutput((prev) => `${prev}\n[stream error: ${message}]\n`);
+        setTerminalConnecting(false);
+        setTerminalStatus(`Stream error: ${message}`);
+      };
+
+      ws.onclose = (event) => {
+        if (terminalSocket.current !== ws) return;
+        if (!opened) {
+          handleEarlyFailure();
+          return;
+        }
+        terminalSocket.current = null;
+        setTerminalConnecting(false);
+        const reason =
+          event.reason ||
+          (event.code === 1008 ? "unauthorized" : event.code === 1006 ? "abnormal closure" : "");
+        if (event.code === 1008) {
+          setStatusMessage("Terminal auth failed. Try logging in again.");
+          setTerminalSessionId(null);
+        }
+        setTerminalOutput(
+          (prev) => `${prev}\n[stream closed (${event.code}${reason ? `: ${reason}` : ""})]\n`
+        );
+        terminalWsCandidatesRef.current = [];
+        setTerminalWsCandidates([]);
+        const idleClosed = reason === "idle timeout" || event.code === 4000;
+        if (idleClosed) {
+          setTerminalStatus((prev) => prev ?? "Closed after idle timeout");
+        } else {
+          const summary = reason
+            ? `Stream closed (${reason})`
+            : event.code
+              ? `Stream closed (code ${event.code})`
+              : "Stream closed.";
+          setTerminalStatus((prev) => prev ?? summary);
+        }
+      };
     };
+
+    tryCandidate(0);
   };
 
   const startTerminalSession = async () => {
@@ -3060,12 +3669,15 @@ export default function Page() {
     setTerminalStatus("Starting terminal session…");
     setTerminalOutput("Starting terminal session…\n");
     try {
-      const { sessionId } = await createTerminalSession(
+      const { sessionId, wsCandidates } = await createTerminalSession(
         sessionToken,
         selectedProjectId ?? undefined
       );
       setTerminalSessionId(sessionId);
-      connectTerminalStream(sessionId, sessionToken);
+      const providedCandidates = Array.isArray(wsCandidates) ? wsCandidates : [];
+      terminalWsCandidatesRef.current = providedCandidates;
+      setTerminalWsCandidates(providedCandidates);
+      connectTerminalStream(sessionId, sessionToken, providedCandidates);
     } catch (err) {
       setTerminalOutput(
         `Failed to start terminal: ${err instanceof Error ? err.message : "unknown error"}\n`
@@ -3430,10 +4042,35 @@ export default function Page() {
   const roadmapSummary = selectedRoadmapId ? roadmapStatus[selectedRoadmapId] : null;
   const siblingTasks = chats.filter((chat) => !chat.meta && chat.id && chat.id !== selectedChatId);
   const lastStatusMessage = [...messages].reverse().find((msg) => msg.role === "status");
+
   const visibleMessages =
     messageFilter === "all"
       ? messages
       : messages.filter((message) => message.role === messageFilter);
+
+  const selectedChatTokens = selectedChatId ? chatTokenUsage[selectedChatId] : null;
+  const contextLimitForChat =
+    selectedChatTokens?.contextLimit && selectedChatTokens.contextLimit > 0
+      ? selectedChatTokens.contextLimit
+      : DEFAULT_CONTEXT_LIMIT;
+  const totalUsedTokens =
+    selectedChatTokens?.totalTokens ??
+    (selectedChatTokens
+      ? (selectedChatTokens.promptTokens ?? 0) + (selectedChatTokens.completionTokens ?? 0)
+      : undefined);
+  const contextRemainingTokens =
+    selectedChatTokens?.contextRemaining ??
+    (totalUsedTokens !== undefined
+      ? Math.max((contextLimitForChat ?? 0) - totalUsedTokens, 0)
+      : undefined);
+  const contextLeftPercent =
+    contextRemainingTokens !== undefined && contextLimitForChat
+      ? Math.max(0, Math.min(100, (contextRemainingTokens / contextLimitForChat) * 100))
+      : null;
+  const showChatLoader =
+    !!selectedChat &&
+    !isMetaChatSelected &&
+    (chatSessionState !== "ready" || messagesForChatId !== selectedChatId);
 
   const messageNav = useMessageNavigation(messages, visibleMessages);
 
@@ -3453,16 +4090,12 @@ export default function Page() {
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    if (chatStreamRef.current && messages.length > 0) {
-      const stream = chatStreamRef.current;
-      const isNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 100;
-      if (isNearBottom || messages.length === 1) {
-        setTimeout(() => {
-          stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
-        }, 100);
-      }
-    }
-  }, [messages.length]);
+    if (!chatStreamRef.current) return;
+    const stream = chatStreamRef.current;
+    setTimeout(() => {
+      stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
+    }, 50);
+  }, [visibleMessages.length, aiStreamingPreview, messagesForChatId]);
 
   const tabBody = (() => {
     switch (activeTab) {
@@ -3662,6 +4295,15 @@ export default function Page() {
               >
                 {messagesLoading ? "Refreshing…" : "Refresh"}
               </button>
+              <button
+                className="ghost"
+                onClick={handleResetChatSession}
+                disabled={
+                  !sessionToken || !selectedChatId || !!selectedChat?.meta || resettingChatSession
+                }
+              >
+                {resettingChatSession ? "Resetting…" : "Reset session"}
+              </button>
               <button className="ghost" onClick={copySelectionLink} disabled={!selectedProjectId}>
                 Copy link
               </button>
@@ -3706,400 +4348,495 @@ export default function Page() {
                 </span>
               )}
             </div>
-            <div className="item-line" style={{ gap: 8, flexWrap: "wrap" }}>
-              {templateForChat ? (
-                <span className="item-pill" title={templateForChat.goal ?? ""}>
-                  Template: {templateForChat.title}
-                  {templateForChat.jsonRequired ? " · requires JSON" : ""}
-                </span>
-              ) : (
-                <span className="item-subtle">Template: none linked</span>
-              )}
-              <span className="item-pill" title={selectedChat.goal ?? ""}>
-                Goal: {selectedChat.goal ?? "—"}
-              </span>
-              {folderHint ? (
-                <span className="item-pill" title={folderHint}>
-                  Folder: {folderHint}
-                </span>
-              ) : (
-                <span className="item-subtle">Folder: project root</span>
-              )}
-              {repoHint ? (
-                <span className="item-pill" title={repoHint}>
-                  Repo: {repoHint}
-                </span>
-              ) : (
-                <span className="item-subtle">Repo: pending</span>
-              )}
-              {managerHint && (
-                <span className="item-pill" title={managerHint}>
-                  Manager: {managerHint}
-                </span>
-              )}
-              {serverHint && (
-                <span className="item-pill" title={serverHint}>
-                  Server: {serverHint}
-                </span>
-              )}
-              {aiChatHint && (
-                <span className="item-pill" title={aiChatHint}>
-                  AI chat: {aiChatHint}
-                </span>
-              )}
-              {roadmapSummary && (
-                <span className="item-pill" title={roadmapSummary.summary ?? ""}>
-                  Roadmap: {progressPercent(roadmapSummary.progress)}% · {roadmapSummary.status}
-                </span>
-              )}
-            </div>
-            <div className="panel-text">
-              Focus:{" "}
-              {selectedChat.focus || selectedChat.note || selectedChat.goal || "No focus yet."}
-            </div>
-            <div className="item-subtle" style={{ marginBottom: 6 }}>
-              {lastStatusMessage
-                ? `Latest status ping: ${lastStatusMessage.content}`
-                : "No status messages yet."}
-            </div>
-            <div className="item-subtle" style={{ marginBottom: 8 }}>
-              Roadmap summary:{" "}
-              {roadmapMeta?.summary ??
-                roadmapSummary?.summary ??
-                "Status will sync from meta-chat once available."}
-            </div>
-            <div className="item-subtle" style={{ marginBottom: 10 }}>
-              Roadmap tasks:{" "}
-              {siblingTasks.length
-                ? siblingTasks
-                    .slice(0, 3)
-                    .map((chat) => `${chat.title} (${progressPercent(chat.progress)}%)`)
-                    .join(" · ")
-                : "No sibling tasks."}
-            </div>
-            <div className="login-row" style={{ gap: 8, flexWrap: "wrap" }}>
-              <select
-                className="filter"
-                value={chatStatusDraft}
-                onChange={(e) => setChatStatusDraft(e.target.value as Status)}
-                style={{ minWidth: 140 }}
-              >
-                {["in_progress", "active", "waiting", "blocked", "done", "idle"].map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="filter"
-                style={{ width: 90 }}
-                value={chatProgressDraft}
-                onChange={(e) => setChatProgressDraft(e.target.value)}
-                placeholder="%"
-              />
-              <input
-                className="filter"
-                style={{ flex: 1, minWidth: 200 }}
-                value={chatFocusDraft}
-                onChange={(e) => setChatFocusDraft(e.target.value)}
-                placeholder="Focus / summary"
-              />
-              <button
-                className="tab"
-                onClick={() => handleUpdateChatStatus()}
-                disabled={messagesLoading}
-              >
-                Update status
-              </button>
-              <button
-                className="ghost"
-                onClick={handleRequestStatusMessage}
-                disabled={messagesLoading}
-              >
-                Request status
-              </button>
-              {chatUpdateMessage && (
-                <span className="item-subtle" style={{ color: "#94a3b8" }}>
-                  {chatUpdateMessage}
-                </span>
-              )}
-            </div>
-            {messagesError && (
-              <div className="item-subtle" style={{ color: "#ef4444" }}>
-                {messagesError}
+            {showChatLoader ? (
+              <div className="panel-text" style={{ marginTop: 12 }}>
+                <div style={{ marginBottom: 8, fontWeight: 600 }}>Preparing AI session…</div>
+                <div className="item-subtle" style={{ marginBottom: 8 }}>
+                  The chat will open after the AI server connects and history is synced.
+                </div>
+                <div
+                  className="chat-loader-steps"
+                  style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                >
+                  {chatSessionSteps.map((step) => (
+                    <div
+                      key={step.key}
+                      className="item-line"
+                      style={{ alignItems: "center", gap: 8 }}
+                    >
+                      <span
+                        className="status-dot"
+                        style={{
+                          background:
+                            step.status === "done"
+                              ? "#10B981"
+                              : step.status === "error"
+                                ? "#EF4444"
+                                : "#F59E0B",
+                        }}
+                      />
+                      <span>{step.label}</span>
+                      <span className="item-subtle">
+                        {step.status === "done"
+                          ? "done"
+                          : step.status === "error"
+                            ? "error"
+                            : "pending"}
+                        {step.detail ? ` · ${step.detail}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {chatSessionError && (
+                  <div className="item-subtle" style={{ color: "#ef4444", marginTop: 10 }}>
+                    {chatSessionError}
+                  </div>
+                )}
+                <div className="login-row" style={{ marginTop: 10, gap: 8 }}>
+                  <button
+                    className="tab"
+                    onClick={() => setChatHydrationTrigger((prev) => prev + 1)}
+                    disabled={chatSessionState === "hydrating"}
+                  >
+                    {chatSessionState === "hydrating" ? "Preparing…" : "Retry"}
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={() => {
+                      if (sessionToken && selectedChatId) {
+                        loadMessagesForChat(selectedChatId, sessionToken);
+                      }
+                    }}
+                    disabled={chatSessionState === "hydrating" || !sessionToken || !selectedChatId}
+                  >
+                    Reload messages
+                  </button>
+                </div>
               </div>
-            )}
-            <div className="login-row" style={{ gap: 8, alignItems: "center", marginBottom: 6 }}>
-              <span className="item-subtle">Messages:</span>
-              <select
-                className="filter"
-                value={messageFilter}
-                onChange={(e) => setMessageFilter(e.target.value as typeof messageFilter)}
-                style={{ minWidth: 160 }}
-              >
-                {["all", "user", "assistant", "system", "status", "meta"].map((value) => (
-                  <option key={value} value={value}>
-                    {value === "all" ? "all roles" : value}
-                  </option>
-                ))}
-              </select>
-              <span className="item-subtle">
-                Showing {visibleMessages.length}/{messages.length} messages
-              </span>
-            </div>
-            <div className="chat-stream" ref={chatStreamRef}>
-              {messagesLoading && <div className="item-subtle">Loading messages…</div>}
-              {!messagesLoading && messages.length === 0 && (
-                <div className="item-subtle">No messages yet.</div>
-              )}
-              {!messagesLoading && messages.length > 0 && visibleMessages.length === 0 && (
-                <div className="item-subtle">No messages match this filter.</div>
-              )}
-              {isAutoDemoChat && (
-                <div className="chat-row">
-                  <span className="chat-role chat-role-system">assistant</span>
-                  <div className="bubble">
-                    <div className="panel-title" style={{ marginBottom: 4 }}>
-                      Auto demo controls (qwen)
-                    </div>
-                    <div className="panel-text" style={{ marginBottom: 6 }}>
-                      Workspace: {autoDemoWorkspace.path} · Repo: {autoDemoWorkspace.repo}
-                    </div>
-                    <div className="demo-attachments" style={{ marginBottom: 8 }}>
-                      <div className="demo-attachment">
-                        <div className="demo-attachment-label">Manager</div>
-                        <div className="demo-attachment-value">{autoDemoWorkspace.manager}</div>
-                      </div>
-                      <div className="demo-attachment">
-                        <div className="demo-attachment-label">Server</div>
-                        <div className="demo-attachment-value">{autoDemoWorkspace.server}</div>
-                      </div>
-                      <div className="demo-attachment">
-                        <div className="demo-attachment-label">AI Chat</div>
-                        <div className="demo-attachment-value">{autoDemoWorkspace.aiChat}</div>
-                      </div>
-                    </div>
-                    <div className="demo-ai-controls" style={{ marginBottom: 6 }}>
-                      <button
-                        className="tab"
-                        onClick={() => {
-                          setAutoDemoAiEnabled(true);
-                          setAutoDemoKickoffSent(false);
-                          setAutoDemoLog("Starting AI demo…");
-                        }}
-                        disabled={!sessionToken}
-                      >
-                        Run AI demo (qwen)
-                      </button>
-                      <button
-                        className="ghost"
-                        onClick={() => {
-                          setAutoDemoAiEnabled(false);
-                          setAutoDemoKickoffSent(false);
-                          setAutoDemoLog("Idle.");
-                          disconnectAutoDemo();
-                        }}
-                        disabled={!autoDemoAiEnabled && !isAutoDemoConnected}
-                      >
-                        Stop
-                      </button>
-                      <span className="item-subtle">{autoDemoLog}</span>
-                    </div>
-                    <div className="demo-ai-stream" style={{ marginTop: 6 }}>
-                      <div className="demo-ai-stream-title">AI output</div>
-                      {autoDemoMessages.slice(-4).map((msg) => (
-                        <div key={msg.id} className={`demo-ai-line demo-ai-${msg.role}`}>
-                          <span className="demo-ai-role">{msg.role}:</span> {msg.content}
+            ) : (
+              <>
+                <div className="item-line" style={{ gap: 8, flexWrap: "wrap" }}>
+                  {templateForChat ? (
+                    <span className="item-pill" title={templateForChat.goal ?? ""}>
+                      Template: {templateForChat.title}
+                      {templateForChat.jsonRequired ? " · requires JSON" : ""}
+                    </span>
+                  ) : (
+                    <span className="item-subtle">Template: none linked</span>
+                  )}
+                  <span className="item-pill" title={selectedChat.goal ?? ""}>
+                    Goal: {selectedChat.goal ?? "—"}
+                  </span>
+                  {folderHint ? (
+                    <span className="item-pill" title={folderHint}>
+                      Folder: {folderHint}
+                    </span>
+                  ) : (
+                    <span className="item-subtle">Folder: project root</span>
+                  )}
+                  {repoHint ? (
+                    <span className="item-pill" title={repoHint}>
+                      Repo: {repoHint}
+                    </span>
+                  ) : (
+                    <span className="item-subtle">Repo: pending</span>
+                  )}
+                  {managerHint && (
+                    <span className="item-pill" title={managerHint}>
+                      Manager: {managerHint}
+                    </span>
+                  )}
+                  {serverHint && (
+                    <span className="item-pill" title={serverHint}>
+                      Server: {serverHint}
+                    </span>
+                  )}
+                  {aiChatHint && (
+                    <span className="item-pill" title={aiChatHint}>
+                      AI chat: {aiChatHint}
+                    </span>
+                  )}
+                  {roadmapSummary && (
+                    <span className="item-pill" title={roadmapSummary.summary ?? ""}>
+                      Roadmap: {progressPercent(roadmapSummary.progress)}% · {roadmapSummary.status}
+                    </span>
+                  )}
+                </div>
+                <div className="panel-text">
+                  Focus:{" "}
+                  {selectedChat.focus || selectedChat.note || selectedChat.goal || "No focus yet."}
+                </div>
+                <div className="item-subtle" style={{ marginBottom: 6 }}>
+                  {lastStatusMessage
+                    ? `Latest status ping: ${lastStatusMessage.content}`
+                    : "No status messages yet."}
+                </div>
+                <div className="item-subtle" style={{ marginBottom: 8 }}>
+                  Roadmap summary:{" "}
+                  {roadmapMeta?.summary ??
+                    roadmapSummary?.summary ??
+                    "Status will sync from meta-chat once available."}
+                </div>
+                <div className="item-subtle" style={{ marginBottom: 10 }}>
+                  Roadmap tasks:{" "}
+                  {siblingTasks.length
+                    ? siblingTasks
+                        .slice(0, 3)
+                        .map((chat) => `${chat.title} (${progressPercent(chat.progress)}%)`)
+                        .join(" · ")
+                    : "No sibling tasks."}
+                </div>
+                <div className="login-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <select
+                    className="filter"
+                    value={chatStatusDraft}
+                    onChange={(e) => setChatStatusDraft(e.target.value as Status)}
+                    style={{ minWidth: 140 }}
+                  >
+                    {["in_progress", "active", "waiting", "blocked", "done", "idle"].map(
+                      (status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      )
+                    )}
+                  </select>
+                  <input
+                    className="filter"
+                    style={{ width: 90 }}
+                    value={chatProgressDraft}
+                    onChange={(e) => setChatProgressDraft(e.target.value)}
+                    placeholder="%"
+                  />
+                  <input
+                    className="filter"
+                    style={{ flex: 1, minWidth: 200 }}
+                    value={chatFocusDraft}
+                    onChange={(e) => setChatFocusDraft(e.target.value)}
+                    placeholder="Focus / summary"
+                  />
+                  <button
+                    className="tab"
+                    onClick={() => handleUpdateChatStatus()}
+                    disabled={messagesLoading}
+                  >
+                    Update status
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={handleRequestStatusMessage}
+                    disabled={messagesLoading}
+                  >
+                    Request status
+                  </button>
+                  {chatUpdateMessage && (
+                    <span className="item-subtle" style={{ color: "#94a3b8" }}>
+                      {chatUpdateMessage}
+                    </span>
+                  )}
+                </div>
+                {messagesError && (
+                  <div className="item-subtle" style={{ color: "#ef4444" }}>
+                    {messagesError}
+                  </div>
+                )}
+                <div
+                  className="login-row"
+                  style={{ gap: 8, alignItems: "center", marginBottom: 6 }}
+                >
+                  <span className="item-subtle">Messages:</span>
+                  <select
+                    className="filter"
+                    value={messageFilter}
+                    onChange={(e) => setMessageFilter(e.target.value as typeof messageFilter)}
+                    style={{ minWidth: 160 }}
+                  >
+                    {["all", "user", "assistant", "system", "status", "meta", "tool"].map(
+                      (value) => (
+                        <option key={value} value={value}>
+                          {value === "all" ? "all roles" : value}
+                        </option>
+                      )
+                    )}
+                  </select>
+                  <span className="item-subtle">
+                    Showing {visibleMessages.length}/{messages.length} messages
+                  </span>
+                </div>
+                <div className="chat-stream" ref={chatStreamRef}>
+                  {messagesLoading && <div className="item-subtle">Loading messages…</div>}
+                  {!messagesLoading && messages.length === 0 && (
+                    <div className="item-subtle">No messages yet.</div>
+                  )}
+                  {!messagesLoading && messages.length > 0 && visibleMessages.length === 0 && (
+                    <div className="item-subtle">No messages match this filter.</div>
+                  )}
+                  {isAutoDemoChat && (
+                    <div className="chat-row">
+                      <span className="chat-role chat-role-system">assistant</span>
+                      <div className="bubble">
+                        <div className="panel-title" style={{ marginBottom: 4 }}>
+                          Auto demo controls (qwen)
                         </div>
-                      ))}
-                      {autoDemoStreaming && (
-                        <div className="demo-ai-line demo-ai-assistant">
-                          <span className="demo-ai-role">assistant:</span> {autoDemoStreaming}
+                        <div className="panel-text" style={{ marginBottom: 6 }}>
+                          Workspace: {autoDemoWorkspace.path} · Repo: {autoDemoWorkspace.repo}
                         </div>
-                      )}
-                      {!autoDemoMessages.length && !autoDemoStreaming && (
-                        <div className="item-subtle">No output yet.</div>
-                      )}
-                    </div>
-                    <div className="panel-text" style={{ marginTop: 8 }}>
-                      Pre-seeded steps for this demo:
-                    </div>
-                    <div className="demo-steps">
-                      {qwenCliPreview.map((step) => (
-                        <div key={step.id} className="demo-step">
-                          <div className="demo-step-headline">✦ {step.headline}</div>
-                          {step.items.map((item, index) => (
-                            <div
-                              key={`${step.id}-${index}`}
-                              className={`demo-step-item demo-step-${item.kind}`}
-                            >
-                              {item.title && (
-                                <div className="demo-step-title">
-                                  {item.kind === "command"
-                                    ? "✓ "
-                                    : item.kind === "diff"
-                                      ? "↦ "
-                                      : ""}
-                                  {item.title}
+                        <div className="demo-attachments" style={{ marginBottom: 8 }}>
+                          <div className="demo-attachment">
+                            <div className="demo-attachment-label">Manager</div>
+                            <div className="demo-attachment-value">{autoDemoWorkspace.manager}</div>
+                          </div>
+                          <div className="demo-attachment">
+                            <div className="demo-attachment-label">Server</div>
+                            <div className="demo-attachment-value">{autoDemoWorkspace.server}</div>
+                          </div>
+                          <div className="demo-attachment">
+                            <div className="demo-attachment-label">AI Chat</div>
+                            <div className="demo-attachment-value">{autoDemoWorkspace.aiChat}</div>
+                          </div>
+                        </div>
+                        <div className="demo-ai-controls" style={{ marginBottom: 6 }}>
+                          <button
+                            className="tab"
+                            onClick={() => {
+                              setAutoDemoAiEnabled(true);
+                              setAutoDemoKickoffSent(false);
+                              setAutoDemoLog("Starting AI demo…");
+                            }}
+                            disabled={!sessionToken}
+                          >
+                            Run AI demo (qwen)
+                          </button>
+                          <button
+                            className="ghost"
+                            onClick={() => {
+                              setAutoDemoAiEnabled(false);
+                              setAutoDemoKickoffSent(false);
+                              setAutoDemoLog("Idle.");
+                              disconnectAutoDemo();
+                            }}
+                            disabled={!autoDemoAiEnabled && !isAutoDemoConnected}
+                          >
+                            Stop
+                          </button>
+                          <span className="item-subtle">{autoDemoLog}</span>
+                        </div>
+                        <div className="demo-ai-stream" style={{ marginTop: 6 }}>
+                          <div className="demo-ai-stream-title">AI output</div>
+                          {autoDemoMessages.slice(-4).map((msg) => (
+                            <div key={msg.id} className={`demo-ai-line demo-ai-${msg.role}`}>
+                              <span className="demo-ai-role">{msg.role}:</span> {msg.content}
+                            </div>
+                          ))}
+                          {autoDemoStreaming && (
+                            <div className="demo-ai-line demo-ai-assistant">
+                              <span className="demo-ai-role">assistant:</span> {autoDemoStreaming}
+                            </div>
+                          )}
+                          {!autoDemoMessages.length && !autoDemoStreaming && (
+                            <div className="item-subtle">No output yet.</div>
+                          )}
+                        </div>
+                        <div className="panel-text" style={{ marginTop: 8 }}>
+                          Pre-seeded steps for this demo:
+                        </div>
+                        <div className="demo-steps">
+                          {qwenCliPreview.map((step) => (
+                            <div key={step.id} className="demo-step">
+                              <div className="demo-step-headline">✦ {step.headline}</div>
+                              {step.items.map((item, index) => (
+                                <div
+                                  key={`${step.id}-${index}`}
+                                  className={`demo-step-item demo-step-${item.kind}`}
+                                >
+                                  {item.title && (
+                                    <div className="demo-step-title">
+                                      {item.kind === "command"
+                                        ? "✓ "
+                                        : item.kind === "diff"
+                                          ? "↦ "
+                                          : ""}
+                                      {item.title}
+                                    </div>
+                                  )}
+                                  {renderDemoStepContent(item)}
                                 </div>
-                              )}
-                              {renderDemoStepContent(item)}
+                              ))}
                             </div>
                           ))}
                         </div>
-                      ))}
+                      </div>
+                      <span className="item-subtle">auto</span>
                     </div>
-                  </div>
-                  <span className="item-subtle">auto</span>
-                </div>
-              )}
-              {visibleMessages.map((message) => (
-                <div
-                  className="chat-row"
-                  key={message.id}
-                  ref={(el) => messageNav.registerRef(message.id, el)}
-                >
-                  <span className={`chat-role chat-role-${message.role}`}>{message.role}</span>
-                  <div className="bubble">{message.content}</div>
-                  <span className="item-subtle">
-                    {new Date(message.createdAt).toLocaleTimeString()}
-                  </span>
-                </div>
-              ))}
-              {aiStreamingPreview &&
-                !isMetaChatSelected &&
-                (messageFilter === "all" || messageFilter === "assistant") && (
-                  <div className="chat-row" key="assistant-streaming">
-                    <span className="chat-role chat-role-assistant">assistant</span>
-                    <div className="bubble" style={{ opacity: 0.85 }}>
-                      {aiStreamingPreview}
-                      <span className="item-subtle" style={{ marginLeft: 8 }}>
-                        streaming…
-                      </span>
+                  )}
+                  {visibleMessages.map((message) => {
+                    const isTool = message.role === "tool";
+                    const [toolStatus, ...toolRest] = isTool ? message.content.split("\n") : [];
+                    const toolDetail = toolRest.join("\n");
+                    return (
+                      <div
+                        className="chat-row"
+                        key={message.id}
+                        ref={(el) => messageNav.registerRef(message.id, el)}
+                      >
+                        <span className={`chat-role chat-role-${message.role}`}>
+                          {message.displayRole ?? message.role}
+                        </span>
+                        <div className="bubble">
+                          {isTool ? (
+                            <>
+                              <span className="tool-status">{toolStatus || "Running"}</span>
+                              {toolDetail && (
+                                <>
+                                  <br />
+                                  {toolDetail}
+                                </>
+                              )}
+                            </>
+                          ) : (
+                            message.content
+                          )}
+                        </div>
+                        <span className="item-subtle">
+                          {new Date(message.createdAt).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {aiStreamingPreview && !isMetaChatSelected && (
+                    <div className="chat-row" key="assistant-streaming">
+                      <span className="chat-role chat-role-assistant">assistant</span>
+                      <div className="bubble" style={{ opacity: 0.85 }}>
+                        {aiStreamingPreview}
+                        <span className="item-subtle" style={{ marginLeft: 8 }}>
+                          streaming…
+                        </span>
+                      </div>
+                      <span className="item-subtle">just now</span>
                     </div>
-                    <span className="item-subtle">just now</span>
+                  )}
+                </div>
+                {messageNav.userMessages.length > 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.5rem",
+                      padding: "0.5rem 0.75rem",
+                      borderTop: "1px solid #374151",
+                      background: "#1F2937",
+                    }}
+                  >
+                    <span className="item-subtle" style={{ fontSize: "0.875rem" }}>
+                      User messages: {messageNav.currentUserMessageIndex + 1} /{" "}
+                      {messageNav.userMessages.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={messageNav.goToPrevious}
+                      style={{
+                        padding: "0.25rem 0.75rem",
+                        fontSize: "0.875rem",
+                        background: "#374151",
+                        color: "#F9FAFB",
+                        border: "1px solid #4B5563",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                      }}
+                      title="Previous user message (wraps around)"
+                    >
+                      ← Prev
+                    </button>
+                    <button
+                      type="button"
+                      onClick={messageNav.goToNext}
+                      style={{
+                        padding: "0.25rem 0.75rem",
+                        fontSize: "0.875rem",
+                        background: "#374151",
+                        color: "#F9FAFB",
+                        border: "1px solid #4B5563",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                      }}
+                      title="Next user message (wraps around)"
+                    >
+                      Next →
+                    </button>
                   </div>
                 )}
-            </div>
-            {messageNav.userMessages.length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  padding: "0.5rem 0.75rem",
-                  borderTop: "1px solid #374151",
-                  background: "#1F2937",
-                }}
-              >
-                <span className="item-subtle" style={{ fontSize: "0.875rem" }}>
-                  User messages: {messageNav.currentUserMessageIndex + 1} /{" "}
-                  {messageNav.userMessages.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={messageNav.goToPrevious}
-                  style={{
-                    padding: "0.25rem 0.75rem",
-                    fontSize: "0.875rem",
-                    background: "#374151",
-                    color: "#F9FAFB",
-                    border: "1px solid #4B5563",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                  }}
-                  title="Previous user message (wraps around)"
-                >
-                  ← Prev
-                </button>
-                <button
-                  type="button"
-                  onClick={messageNav.goToNext}
-                  style={{
-                    padding: "0.25rem 0.75rem",
-                    fontSize: "0.875rem",
-                    background: "#374151",
-                    color: "#F9FAFB",
-                    border: "1px solid #4B5563",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                  }}
-                  title="Next user message (wraps around)"
-                >
-                  Next →
-                </button>
-              </div>
-            )}
-            {slashSuggestions.length > 0 && (
-              <SlashCommandAutocomplete
-                suggestions={slashSuggestions}
-                selectedIndex={slashSelectedIndex}
-                onSelect={handleSlashCommandSelect}
-                inputRef={messageInputRef}
-              />
-            )}
-            <div className="login-row" style={{ alignItems: "flex-start", gap: 8 }}>
-              <textarea
-                ref={messageInputRef}
-                className="code-input"
-                style={{ minHeight: 120, flex: 1 }}
-                placeholder="Send a message to this chat (type / for commands)"
-                value={messageDraft}
-                onChange={(e) => setMessageDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  // Handle slash command autocomplete navigation
-                  if (slashSuggestions.length > 0) {
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      setSlashSelectedIndex((prev) => (prev + 1) % slashSuggestions.length);
-                      return;
-                    }
-                    if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      setSlashSelectedIndex(
-                        (prev) => (prev - 1 + slashSuggestions.length) % slashSuggestions.length
-                      );
-                      return;
-                    }
-                    if (e.key === "Tab") {
-                      e.preventDefault();
-                      handleSlashCommandSelect(slashSuggestions[slashSelectedIndex]);
-                      return;
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setSlashSuggestions([]);
-                      return;
-                    }
-                  }
+                {slashSuggestions.length > 0 && (
+                  <SlashCommandAutocomplete
+                    suggestions={slashSuggestions}
+                    selectedIndex={slashSelectedIndex}
+                    onSelect={handleSlashCommandSelect}
+                    inputRef={messageInputRef}
+                  />
+                )}
+                <div className="login-row" style={{ alignItems: "flex-start", gap: 8 }}>
+                  <textarea
+                    ref={messageInputRef}
+                    className="code-input"
+                    style={{ minHeight: 120, flex: 1 }}
+                    placeholder="Send a message to this chat (type / for commands)"
+                    value={messageDraft}
+                    onChange={(e) => setMessageDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Handle slash command autocomplete navigation
+                      if (slashSuggestions.length > 0) {
+                        if (e.key === "ArrowDown") {
+                          e.preventDefault();
+                          setSlashSelectedIndex((prev) => (prev + 1) % slashSuggestions.length);
+                          return;
+                        }
+                        if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          setSlashSelectedIndex(
+                            (prev) => (prev - 1 + slashSuggestions.length) % slashSuggestions.length
+                          );
+                          return;
+                        }
+                        if (e.key === "Tab") {
+                          e.preventDefault();
+                          handleSlashCommandSelect(slashSuggestions[slashSelectedIndex]);
+                          return;
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setSlashSuggestions([]);
+                          return;
+                        }
+                      }
 
-                  // Regular message sending
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSendMessage();
-                  }
-                }}
-                disabled={!sessionToken || sendingMessage}
-              />
-              <button
-                className="ghost"
-                style={{ alignSelf: "stretch", minHeight: 44 }}
-                onClick={() => setIsFileDialogOpen(true)}
-                disabled={!sessionToken}
-              >
-                Attach
-              </button>
-              <button
-                className="tab"
-                style={{ alignSelf: "stretch", minHeight: 44 }}
-                onClick={handleSendMessage}
-                disabled={
-                  sendingMessage || !messageDraft.trim() || !sessionToken || !selectedChatId
-                }
-              >
-                {sendingMessage ? "Sending…" : "Send"}
-              </button>
-            </div>
+                      // Regular message sending
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendMessage();
+                      }
+                    }}
+                    disabled={!sessionToken || sendingMessage}
+                  />
+                  <button
+                    className="ghost"
+                    style={{ alignSelf: "stretch", minHeight: 44 }}
+                    onClick={() => setIsFileDialogOpen(true)}
+                    disabled={!sessionToken}
+                  >
+                    Attach
+                  </button>
+                  <button
+                    className="tab"
+                    style={{ alignSelf: "stretch", minHeight: 44 }}
+                    onClick={handleSendMessage}
+                    disabled={
+                      sendingMessage || !messageDraft.trim() || !sessionToken || !selectedChatId
+                    }
+                  >
+                    {sendingMessage ? "Sending…" : "Send"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         );
     }
@@ -4132,6 +4869,8 @@ export default function Page() {
         <AIChat sessionToken={sessionToken || undefined} />
       ) : currentSection === "network" ? (
         <Network sessionToken={sessionToken || undefined} />
+      ) : currentSection === "debug" ? (
+        <Debug sessionToken={sessionToken || undefined} />
       ) : (
         <main className="page">
           <FileDialog isOpen={isFileDialogOpen} onClose={() => setIsFileDialogOpen(false)} />
@@ -4140,7 +4879,37 @@ export default function Page() {
               {statusMessage}
             </div>
           )}
-          <div className="columns">
+          {/* Sidebar Trigger Bar */}
+          <div
+            className="sidebar-trigger"
+            onMouseEnter={() => setSidebarHover(true)}
+            onMouseLeave={() => setSidebarHover(false)}
+            onClick={() => setSidebarVisible(!sidebarVisible)}
+          >
+            <span className="sidebar-trigger-icon">Lists</span>
+            <div className="sidebar-trigger-dot" />
+            <div className="sidebar-trigger-dot" />
+            <div className="sidebar-trigger-dot" />
+          </div>
+
+          {/* Sidebar Overlay */}
+          {(sidebarVisible || sidebarHover) && (
+            <div
+              className={`sidebar-overlay ${sidebarVisible || sidebarHover ? "visible" : ""}`}
+              onClick={() => {
+                setSidebarVisible(false);
+                setSidebarHover(false);
+              }}
+            />
+          )}
+
+          {/* Sidebar Popup */}
+          <div
+            className={`sidebar-popup ${sidebarVisible || sidebarHover ? "visible" : ""}`}
+            onMouseEnter={() => setSidebarHover(true)}
+            onMouseLeave={() => setSidebarHover(false)}
+          >
+            {/* Projects Column */}
             <div className="column projects-column column-animated">
               <header className="column-header">
                 <span>Projects</span>
@@ -4374,23 +5143,150 @@ export default function Page() {
                 ))}
               </div>
             </div>
+          </div>
 
-            <div className="column main-panel column-animated">
-              <header className="column-header">
-                <span>Main Panel</span>
-                <div className="tabs">
-                  {["Chat", "Terminal", "Code"].map((tab) => (
-                    <button
-                      key={tab}
-                      className={`tab ${activeTab === tab ? "active" : ""}`}
-                      onClick={() => handleTabChange(tab as MainTab)}
-                    >
-                      {tab}
-                    </button>
-                  ))}
+          {/* Main Content with Responsive Splitter */}
+          <div
+            className={`main-content-wrapper ${windowWidth < 900 ? "vertical" : ""}`}
+            style={{ marginLeft: "32px" }}
+          >
+            {/* Chat Section - Always Visible */}
+            <div className="main-content-chat">
+              <div className="column main-panel column-animated">
+                <header className="column-header">
+                  <span>Chat</span>
+                </header>
+                <div className="panel-body">
+                  {/* Always render chat content */}
+                  {tabBody}
                 </div>
-              </header>
-              <div className="panel-body">{tabBody}</div>
+              </div>
+            </div>
+
+            {/* Terminal/Code Section - Tabs */}
+            <div className="main-content-panels">
+              <div className="column main-panel column-animated">
+                <header className="column-header">
+                  <span>Tools</span>
+                  <div className="tabs">
+                    {["Terminal", "Code"].map((tab) => (
+                      <button
+                        key={tab}
+                        className={`tab ${toolsTab === tab ? "active" : ""}`}
+                        onClick={() => setToolsTab(tab as "Terminal" | "Code")}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+                </header>
+                <div className="panel-body">
+                  {toolsTab === "Terminal" ? (
+                    !sessionToken ? (
+                      <div className="panel-card">
+                        <div className="panel-title">Terminal</div>
+                        <div className="panel-text">Please log in to use the terminal.</div>
+                      </div>
+                    ) : !selectedProjectId ? (
+                      <div className="panel-card">
+                        <div className="panel-title">Terminal</div>
+                        <div className="panel-text">
+                          Select a project to start a terminal session.
+                        </div>
+                      </div>
+                    ) : (
+                      <Terminal
+                        sessionToken={sessionToken}
+                        projectId={selectedProjectId}
+                        onSessionCreated={(sid) => setTerminalSessionId(sid)}
+                        onSessionClosed={() => setTerminalSessionId(null)}
+                        autoConnect={autoOpenTerminal}
+                      />
+                    )
+                  ) : toolsTab === "Code" ? (
+                    <div className="panel-card">
+                      <div className="panel-title">Code Viewer</div>
+                      <div className="panel-text">
+                        Browse workspace files for the selected project (read-only).
+                      </div>
+                      <div className="login-row" style={{ gap: 8, marginBottom: 6 }}>
+                        <button className="tab" onClick={goUpDirectory} disabled={fsLoading}>
+                          ↑ Up
+                        </button>
+                        <input
+                          className="filter"
+                          placeholder="Path"
+                          value={fsPath}
+                          onChange={(e) => setFsPath(e.target.value)}
+                          style={{ flex: 1 }}
+                        />
+                        <button
+                          className="tab"
+                          onClick={() => loadFsTree(fsPath)}
+                          disabled={fsLoading}
+                        >
+                          Open
+                        </button>
+                      </div>
+                      {fsError && (
+                        <div className="item-subtle" style={{ color: "#EF4444" }}>
+                          {fsError}
+                        </div>
+                      )}
+                      <FileTree
+                        entries={fsEntries}
+                        currentPath={fsPath}
+                        onSelectFile={openFile}
+                        onNavigateDir={loadFsTree}
+                        loading={fsLoading}
+                      />
+                      {fsContentPath && (
+                        <>
+                          <div className="item-subtle" style={{ marginBottom: 6 }}>
+                            {fsContentPath} {fsDraft !== fsContent ? "(unsaved)" : null}{" "}
+                            {fsSaveStatus}
+                          </div>
+                          <CodeViewer
+                            content={fsDraft}
+                            filePath={fsContentPath}
+                            readOnly={false}
+                            onChange={(newContent) => {
+                              setFsDraft(newContent);
+                              setFsSaveStatus(null);
+                            }}
+                          />
+                          <div
+                            className="login-row"
+                            style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}
+                          >
+                            <button
+                              className="ghost"
+                              onClick={() => setFsDraft(fsContent)}
+                              disabled={fsDraft === fsContent || fsSaving || fsLoading}
+                            >
+                              Reset
+                            </button>
+                            <button
+                              className="tab"
+                              onClick={saveFile}
+                              disabled={
+                                fsDraft === fsContent ||
+                                fsSaving ||
+                                fsLoading ||
+                                !sessionToken ||
+                                !selectedProjectId
+                              }
+                            >
+                              {fsSaving ? "Saving…" : "Save"}
+                            </button>
+                            {fsSaveStatus && <span className="item-subtle">{fsSaveStatus}</span>}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
 

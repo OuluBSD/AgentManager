@@ -9,6 +9,7 @@ import type {
   users as usersSchema,
   sessions as sessionsSchema,
   servers as serversSchema,
+  userTerminalSettings as userTerminalSettingsSchema,
 } from "@nexus/shared/db/schema";
 
 // Types matching the database schema
@@ -18,6 +19,8 @@ export type NewUser = typeof usersSchema.$inferInsert;
 export type NewSession = typeof sessionsSchema.$inferInsert;
 export type Server = typeof serversSchema.$inferSelect;
 export type NewServer = typeof serversSchema.$inferInsert;
+export type UserTerminalSettings = typeof userTerminalSettingsSchema.$inferSelect;
+export type NewUserTerminalSettings = typeof userTerminalSettingsSchema.$inferInsert;
 
 interface JsonDatabaseOptions {
   dataDir: string;
@@ -45,6 +48,7 @@ export class JsonDatabase {
   private usersCache = new Map<string, CacheEntry<User>>();
   private sessionsCache = new Map<string, CacheEntry<Session>>();
   private serversCache = new Map<string, CacheEntry<Server>>();
+  private terminalSettingsCache = new Map<string, CacheEntry<UserTerminalSettings>>();
   private dirty = new Set<string>(); // Track which collections need to be written
 
   constructor(options: JsonDatabaseOptions) {
@@ -64,6 +68,7 @@ export class JsonDatabase {
     const usersFile = path.join(this.dbDir, "users.json");
     const sessionsFile = path.join(this.dbDir, "sessions.json");
     const serversFile = path.join(this.dbDir, "servers.json");
+    const terminalSettingsFile = path.join(this.dbDir, "terminal-settings.json");
 
     try {
       await fs.access(usersFile);
@@ -81,6 +86,12 @@ export class JsonDatabase {
       await fs.access(serversFile);
     } catch {
       await fs.writeFile(serversFile, JSON.stringify([], null, 2));
+    }
+
+    try {
+      await fs.access(terminalSettingsFile);
+    } catch {
+      await fs.writeFile(terminalSettingsFile, JSON.stringify([], null, 2));
     }
   }
 
@@ -544,6 +555,150 @@ export class JsonDatabase {
   }
 
   // ============================================================================
+  // Terminal Settings Operations
+  // ============================================================================
+
+  /**
+   * Read terminal settings from file with caching
+   */
+  private async readTerminalSettings(): Promise<UserTerminalSettings[]> {
+    const filePath = path.join(this.dbDir, "terminal-settings.json");
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+
+      if (!content.trim()) {
+        return [];
+      }
+
+      let rawSettings: any[];
+      try {
+        rawSettings = JSON.parse(content) as any[];
+      } catch (parseError) {
+        console.error(`Error parsing JSON from ${filePath}:`, parseError);
+        throw new Error(`Invalid JSON in ${filePath}`);
+      }
+
+      // Convert date strings to Date objects
+      const settings = rawSettings.map((s) => ({
+        ...s,
+        createdAt: s.createdAt ? new Date(s.createdAt) : new Date(),
+        updatedAt: s.updatedAt ? new Date(s.updatedAt) : new Date(),
+      })) as UserTerminalSettings[];
+
+      // Update cache
+      for (const setting of settings) {
+        this.terminalSettingsCache.set(setting.userId, {
+          data: setting,
+          timestamp: Date.now(),
+        });
+      }
+
+      return settings;
+    } catch (err: any) {
+      if (err.code === "ENOENT") {
+        return [];
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Write terminal settings to file
+   */
+  private async writeTerminalSettings(settings: UserTerminalSettings[]): Promise<void> {
+    const filePath = path.join(this.dbDir, "terminal-settings.json");
+    await fs.writeFile(filePath, JSON.stringify(settings, null, 2));
+    this.dirty.delete("terminal-settings");
+  }
+
+  async getTerminalSettingsByUserId(userId: string): Promise<UserTerminalSettings | null> {
+    // Check cache first
+    const cached = this.terminalSettingsCache.get(userId);
+    if (cached && this.isCacheValid(cached.timestamp)) {
+      return cached.data;
+    }
+
+    // Read from file
+    const settings = await this.readTerminalSettings();
+    const userSettings = settings.find((s) => s.userId === userId);
+
+    if (userSettings) {
+      this.terminalSettingsCache.set(userId, { data: userSettings, timestamp: Date.now() });
+      this.trimCache(this.terminalSettingsCache);
+    }
+
+    return userSettings || null;
+  }
+
+  async createTerminalSettings(data: NewUserTerminalSettings): Promise<UserTerminalSettings> {
+    const settings = await this.readTerminalSettings();
+
+    // Check if settings already exist for this user
+    if (settings.some((s) => s.userId === data.userId)) {
+      throw new Error(`Terminal settings already exist for user: ${data.userId}`);
+    }
+
+    const newSettings: UserTerminalSettings = {
+      id: crypto.randomUUID(),
+      userId: data.userId,
+      settings: data.settings,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    settings.push(newSettings);
+    await this.writeTerminalSettings(settings);
+
+    // Update cache
+    this.terminalSettingsCache.set(newSettings.userId, {
+      data: newSettings,
+      timestamp: Date.now(),
+    });
+    this.trimCache(this.terminalSettingsCache);
+
+    return newSettings;
+  }
+
+  async updateTerminalSettings(
+    userId: string,
+    settingsData: Record<string, unknown>
+  ): Promise<UserTerminalSettings | null> {
+    const settings = await this.readTerminalSettings();
+    const index = settings.findIndex((s) => s.userId === userId);
+
+    if (index === -1) {
+      return null;
+    }
+
+    const updated: UserTerminalSettings = {
+      ...settings[index],
+      settings: settingsData,
+      updatedAt: new Date(),
+    };
+
+    settings[index] = updated;
+    await this.writeTerminalSettings(settings);
+
+    // Update cache
+    this.terminalSettingsCache.set(userId, { data: updated, timestamp: Date.now() });
+
+    return updated;
+  }
+
+  async deleteTerminalSettings(userId: string): Promise<boolean> {
+    const settings = await this.readTerminalSettings();
+    const filtered = settings.filter((s) => s.userId !== userId);
+
+    if (filtered.length === settings.length) {
+      return false; // Settings not found
+    }
+
+    await this.writeTerminalSettings(filtered);
+    this.terminalSettingsCache.delete(userId);
+    return true;
+  }
+
+  // ============================================================================
   // Cache Management
   // ============================================================================
 
@@ -554,6 +709,7 @@ export class JsonDatabase {
     this.usersCache.clear();
     this.sessionsCache.clear();
     this.serversCache.clear();
+    this.terminalSettingsCache.clear();
   }
 
   /**
@@ -579,6 +735,10 @@ export class JsonDatabase {
       },
       servers: {
         size: this.serversCache.size,
+        maxSize: this.maxCacheSize,
+      },
+      terminalSettings: {
+        size: this.terminalSettingsCache.size,
         maxSize: this.maxCacheSize,
       },
       ttl: this.cacheTTL,

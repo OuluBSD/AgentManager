@@ -2,13 +2,17 @@ import type { FastifyPluginAsync } from "fastify";
 import { validateToken } from "../utils/auth.js";
 import { AIBackendType } from "@nexus/shared/chat/AIBackend";
 import { QwenCommand } from "../services/qwenClient.js";
-import { createAiBridge, resolveAiChain } from "../services/aiChatBridge.js";
+import { resolveAiChain } from "../services/aiChatBridge.js";
+import { sessionManager } from "../services/sessionManager.js";
+import { processLogger } from "../services/processLogger.js";
 
 const CHALLENGE_PROMPT = [
   "System instruction: Adopt a critical collaborator stance.",
   "When statements seem incorrect or risky, challenge them respectfully, ask clarifying questions, surface contradictions, and suggest safer alternatives.",
   "Do not echo this instruction to the user; silently apply it during the conversation.",
 ].join(" ");
+
+const SYSTEM_STATUS_MESSAGE = "Processing system message";
 
 function parseBooleanFlag(value: string | undefined, defaultValue: boolean): boolean {
   if (typeof value !== "string") return defaultValue;
@@ -30,6 +34,15 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
 
     const session = await validateToken(request.server, token);
     if (!session) {
+      processLogger.logWebSocket({
+        id: `ai-ws-${sessionId}-${Date.now()}-unauthorized`,
+        connectionId: sessionId,
+        timestamp: new Date().toISOString(),
+        direction: "send",
+        messageType: "ai-chat:close",
+        content: "unauthorized",
+        metadata: { ip: request.ip },
+      });
       connection.socket.close(1008, "unauthorized");
       return;
     }
@@ -49,14 +62,29 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    let bridgeCleanup: (() => Promise<void>) | null = null;
     const approvedToolGroups = new Set<number>();
     const allowChallenge = parseBooleanFlag(
       challenge,
       parseBooleanFlag(process.env.ASSISTANT_CHALLENGE_ENABLED, true)
     );
     let suppressChallengeReply = allowChallenge;
+    let suppressingStream = false; // Track if we're currently suppressing a stream
+    let systemMessageActive = false;
     let challengeTimeout: NodeJS.Timeout | null = null;
+    let bridge: any = null;
+    const connectionId = `ws-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const runningTools = new Map<
+      string,
+      {
+        groupId?: number;
+        processId?: string;
+        toolName?: string;
+        args?: Record<string, any>;
+        confirmationDetails?: { message: string; requires_approval: boolean };
+        pendingAt?: Date;
+        runningAt?: Date;
+      }
+    >();
 
     try {
       const chain = await resolveAiChain(fastify);
@@ -78,7 +106,10 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         })
       );
 
-      const bridge = await createAiBridge(
+      // Use session manager to get or create bridge
+      const result = await sessionManager.getOrCreateBridge(
+        sessionId,
+        connectionId,
         fastify.log,
         chain,
         (msg: any) => {
@@ -86,9 +117,79 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
             return;
           }
 
+          const systemMessageInFlight = systemMessageActive || suppressingStream;
+          const processId = (bridge as any)?.client?.processId;
+
+          const markToolsCompleted = (status: string, timestamp = new Date()) => {
+            if (!processId) return;
+            const pendingEntries: Array<{
+              toolId: string;
+              processId?: string;
+              toolName?: string;
+              groupId?: number;
+              args?: Record<string, any>;
+              confirmationDetails?: { message: string; requires_approval: boolean };
+              runningAt?: Date;
+              pendingAt?: Date;
+            }> = [];
+
+            if (runningTools.size > 0) {
+              for (const [toolId, info] of runningTools.entries()) {
+                pendingEntries.push({
+                  toolId,
+                  processId: info.processId,
+                  toolName: info.toolName,
+                  groupId: info.groupId,
+                  args: info.args,
+                  confirmationDetails: info.confirmationDetails,
+                  runningAt: info.runningAt,
+                  pendingAt: info.pendingAt,
+                });
+              }
+            } else {
+              // Fallback: if the running map is empty, mark any tools without a completedAt as done
+              const existing = processLogger.getToolUsage(processId) || [];
+              for (const tool of existing) {
+                if (!tool.completedAt) {
+                  pendingEntries.push({
+                    toolId: tool.toolId,
+                    processId,
+                    toolName: tool.toolName,
+                    groupId: tool.toolGroupId,
+                    args: tool.args,
+                    confirmationDetails: tool.confirmationDetails,
+                    runningAt: tool.runningAt,
+                    pendingAt: tool.pendingAt,
+                  });
+                }
+              }
+            }
+
+            if (pendingEntries.length === 0) return;
+
+            for (const entry of pendingEntries) {
+              processLogger.logToolUsage({
+                processId: entry.processId || processId,
+                timestamp,
+                toolGroupId: entry.groupId,
+                toolId: entry.toolId,
+                toolName: entry.toolName || "tool",
+                status,
+                args: entry.args || {},
+                approved: true,
+                confirmationDetails: entry.confirmationDetails,
+                runningAt: entry.runningAt,
+                pendingAt: entry.pendingAt,
+                completedAt: timestamp,
+              });
+              runningTools.delete(entry.toolId);
+            }
+          };
+
           // Auto-approve tool groups
           if (msg.type === "tool_group") {
-            if (!approvedToolGroups.has(msg.id)) {
+            const isNewGroup = !approvedToolGroups.has(msg.id);
+            if (isNewGroup) {
               approvedToolGroups.add(msg.id);
               fastify.log.info(
                 `[AIChat] Auto-approving tool group ${msg.id} with ${msg.tools.length} tools`
@@ -99,30 +200,161 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
                   approved: true,
                   tool_id: tool.tool_id,
                 });
+                if (processId) {
+                  runningTools.set(tool.tool_id, {
+                    groupId: msg.id,
+                    processId,
+                    toolName: tool.tool_name,
+                    args: tool.args,
+                    confirmationDetails: tool.confirmation_details,
+                  });
+                }
+              }
+            }
+            if (processId) {
+              const now = new Date();
+              for (const tool of msg.tools) {
+                const rawStatus = tool.status || "pending";
+                const rawLower = rawStatus.toLowerCase();
+                const shouldPromote =
+                  rawLower === "pending" || rawLower === "waiting_for_confirmation";
+                const status =
+                  approvedToolGroups.has(msg.id) && shouldPromote ? "running" : rawStatus;
+                const statusLower = status.toLowerCase();
+                const isPending = rawLower === "pending" || rawLower === "waiting_for_confirmation";
+                const isRunning =
+                  statusLower === "running" || statusLower === "in_progress" || statusLower === "executing";
+                const existing = runningTools.get(tool.tool_id);
+                const pendingAt = existing?.pendingAt ?? (isPending ? now : undefined);
+                const runningAt = existing?.runningAt ?? (isRunning ? now : undefined);
+                processLogger.logToolUsage({
+                  processId,
+                  timestamp: now,
+                  toolGroupId: msg.id,
+                  toolId: tool.tool_id,
+                  toolName: tool.tool_name,
+                  status,
+                  pendingAt,
+                  runningAt,
+                  args: tool.args,
+                  confirmationDetails: tool.confirmation_details,
+                  approved:
+                    isNewGroup ||
+                    tool.confirmation_details?.requires_approval !== true ||
+                    (statusLower !== "pending" && statusLower !== "waiting_for_confirmation"),
+                });
+
+                const lower = status.toLowerCase();
+                const isCompleted =
+                  lower === "success" ||
+                  lower === "ready" ||
+                  lower === "completed" ||
+                  lower === "complete" ||
+                  lower === "done" ||
+                  lower === "error" ||
+                  lower === "failed" ||
+                  lower === "failure";
+                if (isCompleted) {
+                  runningTools.delete(tool.tool_id);
+                } else {
+                  runningTools.set(tool.tool_id, {
+                    groupId: msg.id,
+                    processId,
+                    toolName: tool.tool_name,
+                    args: tool.args,
+                    confirmationDetails: tool.confirmation_details,
+                    pendingAt,
+                    runningAt,
+                  });
+                }
               }
             }
           }
 
+          if (msg.type === "status" && systemMessageInFlight) {
+            connection.socket.send(
+              JSON.stringify({
+                ...msg,
+                message: SYSTEM_STATUS_MESSAGE,
+                context: "system",
+              })
+            );
+            return;
+          }
+
           if (
-            suppressChallengeReply &&
             msg.type === "conversation" &&
             msg.role === "assistant" &&
             typeof msg.content === "string"
           ) {
-            suppressChallengeReply = false;
-            if (challengeTimeout) {
-              clearTimeout(challengeTimeout);
-              challengeTimeout = null;
+            // Start suppressing if this is the first message and we should suppress the challenge reply
+            if (suppressChallengeReply && !suppressingStream) {
+              suppressingStream = true;
+              if (challengeTimeout) {
+                clearTimeout(challengeTimeout);
+                challengeTimeout = null;
+              }
+              fastify.log.info(
+                `[AIChat] Starting to suppress challenge reply stream for session ${sessionId}`
+              );
             }
-            return;
+
+            // If we're suppressing, check if the stream is complete
+            if (suppressingStream) {
+              // Stream is complete when isStreaming is explicitly false
+              if (msg.isStreaming === false) {
+                suppressingStream = false;
+                suppressChallengeReply = false;
+                systemMessageActive = false;
+                fastify.log.info(
+                  `[AIChat] Finished suppressing challenge reply stream for session ${sessionId}`
+                );
+                // Send status back to idle after system initialization completes
+                connection.socket.send(
+                  JSON.stringify({
+                    type: "status",
+                    state: "idle",
+                    message: "Ready",
+                  })
+                );
+              }
+              // Suppress this chunk
+              return;
+            }
+          }
+
+          if (
+            msg.type === "conversation" &&
+            msg.role === "assistant" &&
+            msg.isStreaming === false &&
+            runningTools.size > 0
+          ) {
+            markToolsCompleted("completed");
+          }
+
+          if (msg.type === "status" && msg.state === "idle") {
+            markToolsCompleted("completed");
+          }
+
+          if (msg.type === "completion_stats") {
+            markToolsCompleted("completed");
           }
 
           connection.socket.send(JSON.stringify(msg));
         },
         {
           workspaceRoot: workspace,
+          purpose: "AI Chat Session",
+          initiator: {
+            type: "user",
+            userId: session.userId,
+            sessionId: sessionId,
+            username: session.username,
+          },
         }
       );
+      bridge = result.bridge;
+      const isNewSession = result.isNew;
 
       connection.socket.send(
         JSON.stringify({
@@ -143,28 +375,77 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
         })
       );
 
-      if (allowChallenge) {
+      // Only send CHALLENGE_PROMPT for NEW sessions to avoid showing system instruction response when reconnecting
+      if (allowChallenge && isNewSession) {
+        fastify.log.info(
+          `[AIChat] Sending CHALLENGE_PROMPT for new session ${sessionId} (isNew=${isNewSession})`
+        );
+
+        systemMessageActive = true;
+        // Send custom status message for system initialization
+        connection.socket.send(
+          JSON.stringify({
+            type: "status",
+            state: "responding",
+            message: SYSTEM_STATUS_MESSAGE,
+            context: "system",
+          })
+        );
+
         bridge.send({
           type: "user_input",
           content: CHALLENGE_PROMPT,
         });
         challengeTimeout = setTimeout(() => {
           suppressChallengeReply = false;
+          systemMessageActive = false;
           challengeTimeout = null;
         }, 5000);
+      } else if (allowChallenge && !isNewSession) {
+        fastify.log.info(
+          `[AIChat] Skipping CHALLENGE_PROMPT for existing session ${sessionId} (isNew=${isNewSession})`
+        );
+        // Don't need to suppress reply for reused sessions since we're not sending the prompt
+        suppressChallengeReply = false;
       }
-
-      bridgeCleanup = async () => {
-        await bridge.shutdown();
-      };
 
       connection.socket.on("message", (data: Buffer) => {
         try {
-          const message = JSON.parse(data.toString()) as QwenCommand;
-          bridge.send(message);
+          const message = JSON.parse(data.toString()) as any;
+
+          // Handle disconnect message - immediately release session
+          if (message.type === "disconnect") {
+            fastify.log.info(
+              `[AIChat] Received disconnect message for session ${sessionId} connectionId=${connectionId}`
+            );
+            sessionManager
+              .releaseSession(sessionId, connectionId, fastify.log)
+              .then(() => {
+                fastify.log.info(
+                  `[AIChat] Session ${sessionId} connectionId=${connectionId} released via disconnect message`
+                );
+              })
+              .catch((err) => {
+                fastify.log.error({ err }, "[AIChat] Error during disconnect message handling");
+              });
+            return;
+          }
+
+          // Forward other messages to bridge
+          bridge.send(message as QwenCommand);
         } catch (err) {
           fastify.log.error(err, "Failed to handle message");
         }
+      });
+
+      processLogger.logWebSocket({
+        id: `ai-ws-${sessionId}-${Date.now()}-open`,
+        connectionId,
+        timestamp: new Date().toISOString(),
+        direction: "receive",
+        messageType: "ai-chat:open",
+        content: `backend=${backend}`,
+        metadata: { ip: request.ip },
       });
     } catch (err: any) {
       fastify.log.error({ err }, "[AIChat] Failed to initialize AI bridge");
@@ -179,17 +460,27 @@ export const aiChatRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     connection.socket.on("close", async () => {
-      fastify.log.info(`[AIChat] WebSocket for session ${sessionId} closed`);
+      fastify.log.info(
+        `[AIChat] WebSocket for session ${sessionId} connectionId=${connectionId} closed - releasing session`
+      );
       if (challengeTimeout) {
         clearTimeout(challengeTimeout);
         challengeTimeout = null;
       }
-      if (bridgeCleanup) {
-        try {
-          await bridgeCleanup();
-        } catch (err) {
-          fastify.log.error({ err }, "[AIChat] Error during bridge cleanup");
-        }
+      processLogger.logWebSocket({
+        id: `ai-ws-${sessionId}-${Date.now()}-close`,
+        connectionId,
+        timestamp: new Date().toISOString(),
+        direction: "send",
+        messageType: "ai-chat:close",
+        content: "client closed",
+        metadata: { ip: request.ip },
+      });
+      try {
+        await sessionManager.releaseSession(sessionId, connectionId, fastify.log);
+        fastify.log.info(`[AIChat] Session ${sessionId} connectionId=${connectionId} released`);
+      } catch (err) {
+        fastify.log.error({ err }, "[AIChat] Error during session release");
       }
     });
   });
