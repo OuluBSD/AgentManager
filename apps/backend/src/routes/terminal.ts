@@ -4,6 +4,8 @@ import {
   createTerminalSession,
   getTerminalSession,
   sendInput,
+  markSessionConnected,
+  getOutputSince,
 } from "../services/terminalManager";
 import { processLogger } from "../services/processLogger";
 import { requireSession, validateToken } from "../utils/auth";
@@ -106,7 +108,8 @@ async function checkWorkerServerAttachment(fastify: any, projectId: string) {
     if (workspaces.length === 0) {
       return {
         hasWorker: false,
-        error: "No worker server attached to this project. Please attach a worker server in the project roadmap settings.",
+        error:
+          "No worker server attached to this project. Please attach a worker server in the project roadmap settings.",
       };
     }
 
@@ -120,7 +123,8 @@ async function checkWorkerServerAttachment(fastify: any, projectId: string) {
 
     return {
       hasWorker: false,
-      error: "Worker server is offline or not configured. Please ensure a worker server is online and attached to this project.",
+      error:
+        "Worker server is offline or not configured. Please ensure a worker server is online and attached to this project.",
     };
   }
 
@@ -131,7 +135,8 @@ async function checkWorkerServerAttachment(fastify: any, projectId: string) {
   if (workerServers.length === 0) {
     return {
       hasWorker: false,
-      error: "No online worker servers available. Please start a worker server or check server status.",
+      error:
+        "No online worker servers available. Please start a worker server or check server status.",
     };
   }
 
@@ -165,11 +170,19 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
 
     const terminal = await createTerminalSession(body?.projectId, body?.cwd);
     if (!terminal) {
+      fastify.log.error(
+        `[Terminal] Failed to create terminal session for project ${body?.projectId} in ${body?.cwd || "default cwd"}`
+      );
       reply
         .code(400)
         .send({ error: { code: "bad_path", message: "Failed to start terminal session" } });
       return;
     }
+
+    fastify.log.info(
+      `[Terminal] Created session ${terminal.id.substring(0, 8)} for project ${body?.projectId || "none"} in ${body?.cwd || terminal.cwd}`
+    );
+
     await recordAuditEvent(fastify, {
       userId: session.userId,
       projectId: body?.projectId ?? null,
@@ -186,6 +199,9 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
     const token =
       bearer ?? (request.headers["x-session-token"] as string | undefined) ?? session?.token;
     const wsCandidates = buildTerminalWsCandidates(request, terminal.id, token);
+    fastify.log.info(
+      `[Terminal] Providing ${wsCandidates.length} WebSocket candidates for session ${terminal.id.substring(0, 8)}`
+    );
     reply.code(201).send({ sessionId: terminal.id, wsCandidates });
   });
 
@@ -200,8 +216,16 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       const query = request.query as { token?: string };
       const token =
         bearer ?? (request.headers["x-session-token"] as string | undefined) ?? query?.token;
+
+      fastify.log.info(
+        `[Terminal] WebSocket connection attempt for session ${params.sessionId.substring(0, 8)} from ${request.ip}`
+      );
+
       const session = await validateToken(request.server, token);
       if (!session) {
+        fastify.log.warn(
+          `[Terminal] WebSocket auth failed for session ${params.sessionId.substring(0, 8)}: invalid token`
+        );
         processLogger.logWebSocket({
           id: `ws-${params.sessionId}-${Date.now()}-unauthorized`,
           connectionId: params.sessionId,
@@ -217,6 +241,9 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
 
       const managed = getTerminalSession(params.sessionId);
       if (!managed) {
+        fastify.log.error(
+          `[Terminal] Session ${params.sessionId.substring(0, 8)} not found. This usually means the terminal process exited before WebSocket connected. Check shell configuration and working directory.`
+        );
         processLogger.logWebSocket({
           id: `ws-${params.sessionId}-${Date.now()}-missing`,
           connectionId: params.sessionId,
@@ -230,10 +257,39 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
         return;
       }
 
+      // Mark that this session has a WebSocket connection
+      markSessionConnected(params.sessionId);
+      fastify.log.info(
+        `[Terminal] WebSocket connected successfully to session ${params.sessionId.substring(0, 8)}`
+      );
+
+      // Check if the process has already exited before we registered handlers
+      if (managed.exitCode !== null) {
+        const exitInfo = `exit code ${managed.exitCode}`;
+        fastify.log.error(
+          `[Terminal] Process for session ${params.sessionId.substring(0, 8)} already exited (${exitInfo}) before WebSocket connected. Shell may have failed to start.`
+        );
+        processLogger.logWebSocket({
+          id: `ws-${params.sessionId}-${Date.now()}-already-exited`,
+          connectionId: params.sessionId,
+          timestamp: new Date().toISOString(),
+          direction: "send",
+          messageType: "terminal:error",
+          content: `process already exited: ${exitInfo}`,
+          metadata: { ip: request.ip, exitCode: managed.exitCode },
+        });
+        const exitMessage = `\r\n[Terminal process exited immediately (${exitInfo}). This usually means the shell failed to start or exited due to configuration errors.]\r\n`;
+        connection.socket.send(exitMessage);
+        connection.socket.close(4001, "process already exited");
+        closeTerminalSession(params.sessionId);
+        return;
+      }
+
       const idleEnv = Number(process.env.TERMINAL_IDLE_MS ?? "");
       const idleTimeoutMs = Number.isFinite(idleEnv) && idleEnv >= 0 ? idleEnv : DEFAULT_IDLE_MS;
 
       let socketClosed = false;
+      let socketOpened = false; // Track if connection was actually established
       let exitLogged = false;
       let exitReason: "idle_timeout" | null = null;
       let idleTimer: NodeJS.Timeout | null = null;
@@ -256,17 +312,18 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
 
       resetIdleTimer();
 
-      const handleStdout = (chunk: Buffer) => {
+      // PTY data handler (combines stdout and stderr)
+      const handleData = (data: string) => {
         if (connection.socket.readyState === connection.socket.OPEN) {
-          connection.socket.send(chunk);
+          connection.socket.send(data);
         }
       };
-      const handleStderr = (chunk: Buffer) => {
-        if (connection.socket.readyState === connection.socket.OPEN) {
-          connection.socket.send(chunk);
-        }
-      };
+
       const handleExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        fastify.log.info(
+          `[Terminal] handleExit fired for session ${params.sessionId.substring(0, 8)}: code=${code}, signal=${signal}, socketClosed=${socketClosed}, readyState=${connection.socket.readyState}`
+        );
+
         if (idleTimer) clearTimeout(idleTimer);
         idleTimer = null;
         if (!exitLogged) {
@@ -285,51 +342,114 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
             },
           }).catch((err) => fastify.log.error({ err }, "Failed to record terminal exit"));
         }
+
+        fastify.log.info(
+          `[Terminal] Checking if should close socket: socketClosed=${socketClosed}, readyState=${connection.socket.readyState} (OPEN=${connection.socket.OPEN})`
+        );
+
         if (!socketClosed && connection.socket.readyState === connection.socket.OPEN) {
           const exitMessage =
             exitReason === "idle_timeout"
               ? `\n[session closed after ${Math.round(idleTimeoutMs / 1000)}s idle timeout]\n`
               : `\n[process exited with code ${code ?? "0"}]\n`;
+          fastify.log.info(
+            `[Terminal] Sending exit message and closing socket for session ${params.sessionId.substring(0, 8)}`
+          );
           connection.socket.send(exitMessage);
           connection.socket.close();
+          fastify.log.info(
+            `[Terminal] Socket close() called for session ${params.sessionId.substring(0, 8)}`
+          );
+        } else {
+          fastify.log.warn(
+            `[Terminal] NOT closing socket for session ${params.sessionId.substring(0, 8)}: socketClosed=${socketClosed}, readyState=${connection.socket.readyState}`
+          );
         }
       };
 
-      managed.proc.stdout.on("data", handleStdout);
-      managed.proc.stderr.on("data", handleStderr);
-      managed.proc.on("exit", handleExit);
+      // Register PTY event listeners
+      const dataDisposable = managed.ptyProcess.onData(handleData);
+      const exitDisposable = managed.ptyProcess.onExit(({ exitCode, signal }) => {
+        handleExit(exitCode, signal ? (signal as unknown as NodeJS.Signals) : null);
+      });
+
+      // Send any buffered output that was captured before WebSocket connected
+      const buffered = getOutputSince(params.sessionId, 0);
+      if (buffered && buffered.chunks.length > 0) {
+        fastify.log.info(
+          `[Terminal] Sending ${buffered.chunks.length} buffered chunks (${buffered.chunks.reduce((sum, c) => sum + c.data.length, 0)} bytes) to WebSocket for session ${params.sessionId.substring(0, 8)}`
+        );
+        for (const chunk of buffered.chunks) {
+          const decoded = Buffer.from(chunk.data, "base64").toString("utf-8");
+          if (connection.socket.readyState === connection.socket.OPEN) {
+            connection.socket.send(decoded);
+          }
+        }
+      }
 
       connection.socket.on("message", (data: Buffer) => {
-        const input = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
-        managed.proc.stdin.write(input);
+        socketOpened = true; // Mark as actually in use when first message received
+        const input = Buffer.isBuffer(data) ? data.toString("utf-8") : String(data);
+        fastify.log.info(
+          `\x1b[36m[Terminal]\x1b[0m Received input from WebSocket for session \x1b[33m${params.sessionId.substring(0, 8)}\x1b[0m: \x1b[32m${input.length} bytes\x1b[0m, first char code: ${input.charCodeAt(0)}`
+        );
+        managed.ptyProcess.write(input);
         resetIdleTimer();
       });
 
       connection.socket.on("close", () => {
+        fastify.log.info(
+          `[Terminal] WebSocket close event fired for session ${params.sessionId.substring(0, 8)}, socketOpened=${socketOpened}`
+        );
         socketClosed = true;
-        managed.proc.stdout.off("data", handleStdout);
-        managed.proc.stderr.off("data", handleStderr);
+        dataDisposable.dispose();
+        exitDisposable.dispose();
         if (idleTimer) clearTimeout(idleTimer);
         idleTimer = null;
-        closeTerminalSession(params.sessionId);
+
+        // Only kill the process if the WebSocket was actually being used
+        // This prevents killing the process when WS connection fails before being established
+        if (socketOpened) {
+          fastify.log.info(
+            `[Terminal] WebSocket was in use, closing terminal session ${params.sessionId.substring(0, 8)}`
+          );
+          closeTerminalSession(params.sessionId);
+        } else {
+          fastify.log.info(
+            `[Terminal] WebSocket closed before being used, keeping session ${params.sessionId.substring(0, 8)} alive for polling fallback`
+          );
+        }
+
         processLogger.logWebSocket({
           id: `ws-${params.sessionId}-${Date.now()}-close`,
           connectionId: params.sessionId,
           timestamp: new Date().toISOString(),
           direction: "send",
           messageType: "terminal:close",
-          content: "client closed",
-          metadata: { ip: request.ip },
+          content: socketOpened ? "client closed after use" : "client closed before use",
+          metadata: { ip: request.ip, socketOpened },
         });
+        fastify.log.info(
+          `[Terminal] WebSocket cleanup complete for session ${params.sessionId.substring(0, 8)}`
+        );
       });
 
       connection.socket.on("error", (err) => {
+        fastify.log.error(
+          `[Terminal] WebSocket error for session ${params.sessionId.substring(0, 8)}, socketOpened=${socketOpened}`,
+          err
+        );
         socketClosed = true;
-        managed.proc.stdout.off("data", handleStdout);
-        managed.proc.stderr.off("data", handleStderr);
+        dataDisposable.dispose();
+        exitDisposable.dispose();
         if (idleTimer) clearTimeout(idleTimer);
         idleTimer = null;
-        closeTerminalSession(params.sessionId);
+
+        // Only kill the process if the WebSocket was actually being used
+        if (socketOpened) {
+          closeTerminalSession(params.sessionId);
+        }
+
         if (connection.socket.readyState === connection.socket.OPEN) {
           connection.socket.close(1011, "socket error");
         }
@@ -340,22 +460,44 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
           direction: "send",
           messageType: "terminal:error",
           content: err instanceof Error ? err.message : "socket error",
-          metadata: { ip: request.ip },
+          metadata: { ip: request.ip, socketOpened },
         });
       });
 
-      connection.socket.send("terminal stream ready");
+      // Don't send "terminal stream ready" text - it appears in the terminal!
+      // Just log that connection is established
       processLogger.logWebSocket({
         id: `ws-${params.sessionId}-${Date.now()}-open`,
         connectionId: params.sessionId,
         timestamp: new Date().toISOString(),
         direction: "receive",
         messageType: "terminal:open",
-        content: "terminal stream ready",
+        content: "websocket connected",
         metadata: { ip: request.ip, idleTimeoutMs },
       });
+
+      fastify.log.info(
+        `\x1b[36m[Terminal]\x1b[0m WebSocket fully initialized for session \x1b[33m${params.sessionId.substring(0, 8)}\x1b[0m`
+      );
     }
   );
+
+  // Polling-based output endpoint (fallback when WebSocket fails)
+  fastify.get("/terminal/sessions/:sessionId/output", async (request, reply) => {
+    const session = await requireSession(request, reply);
+    if (!session) return;
+    const params = request.params as { sessionId: string };
+    const query = request.query as { since?: string };
+    const sinceSequence = Number(query.since || "0");
+
+    const output = getOutputSince(params.sessionId, sinceSequence);
+    if (!output) {
+      reply.code(404).send({ error: { code: "not_found", message: "Session not found" } });
+      return;
+    }
+
+    reply.send(output);
+  });
 
   fastify.post("/terminal/sessions/:sessionId/input", async (request, reply) => {
     const session = await requireSession(request, reply);

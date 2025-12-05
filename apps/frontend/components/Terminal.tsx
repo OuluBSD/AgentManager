@@ -32,9 +32,12 @@ export function Terminal({
   const fitAddonRef = useRef<InstanceType<typeof import("@xterm/addon-fit").FitAddon> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const onDataDisposableRef = useRef<{ dispose: () => void } | null>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSequenceRef = useRef<number>(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isAttached, setIsAttached] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [usingPolling, setUsingPolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<TerminalSettings>(DEFAULT_SETTINGS);
@@ -58,6 +61,105 @@ export function Terminal({
     }
   }, [onSessionCreated, projectId, sessionToken]);
 
+  // Attach using polling (fallback when WebSocket fails)
+  const attachSessionPolling = useCallback(
+    (sid: string) => {
+      if (!xtermRef.current) return;
+      if (pollingIntervalRef.current) return; // Already polling
+
+      console.log("[Terminal] Falling back to polling mode");
+      setUsingPolling(true);
+      setIsAttached(true);
+      setIsConnecting(false);
+      setError(null);
+      lastSequenceRef.current = 0;
+
+      if (xtermRef.current) {
+        xtermRef.current.write("\r\n[Connected via polling mode]\r\n");
+        onDataDisposableRef.current?.dispose();
+        onDataDisposableRef.current = xtermRef.current.onData((data) => {
+          // Send input via POST
+          fetch(`/api/terminal/sessions/${sid}/input`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${sessionToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ data }),
+          }).catch((err) => {
+            console.error("[Terminal] Failed to send input:", err);
+          });
+        });
+      }
+
+      // Poll for output
+      const poll = async () => {
+        try {
+          const res = await fetch(
+            `/api/terminal/sessions/${sid}/output?since=${lastSequenceRef.current}`,
+            {
+              headers: {
+                Authorization: `Bearer ${sessionToken}`,
+              },
+            }
+          );
+
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+
+          const data = await res.json();
+          if (data.chunks && data.chunks.length > 0) {
+            for (const chunk of data.chunks) {
+              const decoded = atob(chunk.data);
+              const bytes = new Uint8Array(decoded.length);
+              for (let i = 0; i < decoded.length; i++) {
+                bytes[i] = decoded.charCodeAt(i);
+              }
+              const text = new TextDecoder().decode(bytes);
+              if (xtermRef.current) {
+                xtermRef.current.write(text);
+              }
+            }
+            lastSequenceRef.current = data.currentSequence;
+          }
+
+          if (data.exited) {
+            if (xtermRef.current) {
+              xtermRef.current.write(
+                `\r\n[process exited with code ${data.exitCode ?? "unknown"}]\r\n`
+              );
+            }
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            setIsAttached(false);
+            setUsingPolling(false);
+            setSessionId(null);
+            serverCandidatesRef.current = [];
+            setServerWsCandidates([]);
+            onSessionClosed?.();
+          }
+        } catch (err) {
+          console.error("[Terminal] Polling error:", err);
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+          setError("Polling connection failed");
+          setIsAttached(false);
+          setUsingPolling(false);
+        }
+      };
+
+      // Start polling
+      pollingIntervalRef.current = setInterval(poll, 200);
+      poll(); // Initial poll
+    },
+    [onSessionClosed, sessionToken]
+  );
+
   // Attach to terminal session via WebSocket
   const attachSession = useCallback(
     (sid: string) => {
@@ -76,10 +178,8 @@ export function Terminal({
       const tryConnect = (index: number) => {
         const targetUrl = wsCandidates[index];
         if (!targetUrl) {
-          setError("WebSocket connection error");
-          setIsConnecting(false);
-          setSessionId(null);
-          onSessionClosed?.();
+          console.log("[Terminal] All WebSocket candidates failed, falling back to polling");
+          attachSessionPolling(sid);
           return;
         }
 
@@ -184,7 +284,7 @@ export function Terminal({
 
       tryConnect(0);
     },
-    [onSessionClosed, serverWsCandidates, sessionToken]
+    [attachSessionPolling, onSessionClosed, serverWsCandidates, sessionToken]
   );
 
   // Detach from terminal session
@@ -195,11 +295,17 @@ export function Terminal({
       wsRef.current.close();
       wsRef.current = null;
     }
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
     setSessionId(null);
     serverCandidatesRef.current = [];
     setServerWsCandidates([]);
     setIsConnecting(false);
     setIsAttached(false);
+    setUsingPolling(false);
+    lastSequenceRef.current = 0;
   };
 
   // Load settings from backend or localStorage
@@ -361,6 +467,10 @@ export function Terminal({
         wsRef.current.close();
         wsRef.current = null;
       }
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
       onSessionClosed?.();
     };
   }, [onSessionClosed]);
@@ -487,7 +597,7 @@ export function Terminal({
               fontWeight: 600,
             }}
           >
-            ● Connected
+            ● Connected{usingPolling ? " (polling)" : ""}
           </span>
         )}
       </div>
@@ -527,7 +637,9 @@ export function Terminal({
               bottom: 0,
               zIndex: 0,
               ...getBackgroundStyle(),
-              opacity: settings.backgroundImage ? settings.backgroundOpacity : settings.gradientOpacity,
+              opacity: settings.backgroundImage
+                ? settings.backgroundOpacity
+                : settings.gradientOpacity,
             }}
           >
             {settings.enableGradient && !settings.backgroundImage && (
