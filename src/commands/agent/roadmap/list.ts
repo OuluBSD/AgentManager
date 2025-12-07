@@ -36,6 +36,9 @@ export class RoadmapListHandler implements CommandHandler {
 
       if (response.status === 'error') {
         throw new Error(`Failed to retrieve roadmaps: ${response.message}`);
+      } else if (response.status === 'auth_error') {
+        // Handle authentication error specifically
+        throw new Error(`Authentication error: ${response.message}`);
       }
 
       // Filter roadmaps if filter flag is provided
@@ -62,7 +65,8 @@ export class RoadmapListHandler implements CommandHandler {
       }
 
       return {
-        roadmaps
+        roadmaps,
+        count: roadmaps.length
       };
     } catch (error) {
       throw new Error(`Failed to list roadmaps: ${(error as Error).message}`);

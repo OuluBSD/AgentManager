@@ -34,6 +34,14 @@ export const hints: Hint[] = [
   {
     errorType: 'MISSING_AI_SESSION_CONTEXT',
     message: "Tip: Use 'nexus ai session create' to start an AI session."
+  },
+  {
+    errorType: 'CONFIG_PARSE_ERROR',
+    message: "Configuration file is corrupted. Run 'rm ~/.nexus/config.json' to reset configuration, or manually fix the JSON syntax in the config file."
+  },
+  {
+    errorType: 'AUTH_ERROR',
+    message: "Authentication required or token invalid. Run 'nexus auth login' to authenticate or check your credentials."
   }
 ];
 

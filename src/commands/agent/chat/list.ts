@@ -31,10 +31,14 @@ export class ChatListHandler implements CommandHandler {
 
       if (response.status === 'error') {
         throw new Error(`Failed to retrieve chats: ${response.message}`);
+      } else if (response.status === 'auth_error') {
+        // Handle authentication error specifically
+        throw new Error(`Authentication error: ${response.message}`);
       }
 
       return {
-        chats: response.data.chats
+        chats: response.data.chats,
+        count: response.data.chats.length
       };
     } catch (error) {
       throw new Error(`Failed to list chats: ${(error as Error).message}`);

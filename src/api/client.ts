@@ -463,6 +463,27 @@ export class APIClient {
         };
       }
 
+      // Check for authentication specific endpoints and simulate auth errors
+      if (endpoint.startsWith('/projects') ||
+          endpoint.startsWith('/roadmaps') ||
+          endpoint.startsWith('/chats') ||
+          endpoint.startsWith('/debug')) {
+        // Simulate different auth responses for testing
+        if (headers['Authorization'] === 'Bearer invalid-token') {
+          return {
+            status: 401,
+            data: { message: 'Invalid authentication token' },
+            headers: { 'content-type': 'application/json' }
+          };
+        } else if (!headers['Authorization']) {
+          return {
+            status: 401,
+            data: { message: 'Authentication required' },
+            headers: { 'content-type': 'application/json' }
+          };
+        }
+      }
+
       // Default response for unhandled endpoints
       return {
         status: 404,
@@ -486,63 +507,135 @@ export class APIClient {
   // Specific project methods
   async getProjects(): Promise<ListProjectsResponse> {
     const response = await this.makeRequest('/projects', { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { projects: response.data.projects || [] },
-      message: response.status === 200 ? 'Projects retrieved successfully' : 'Failed to retrieve projects',
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? 'Projects retrieved successfully'
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : 'Failed to retrieve projects'),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   async getProjectById(id: string): Promise<GetProjectResponse> {
     const response = await this.makeRequest(`/projects/${id}`, { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { project: response.data.project || null },
-      message: response.status === 200 ? `Project ${id} retrieved successfully` : `Failed to retrieve project ${id}`,
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? `Project ${id} retrieved successfully`
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : `Failed to retrieve project ${id}`),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   // Roadmap methods
   async getRoadmaps(projectId: string): Promise<ListRoadmapsResponse> {
     const response = await this.makeRequest(`/projects/${projectId}/roadmaps`, { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { roadmaps: response.data.roadmaps || [] },
-      message: response.status === 200 ? `Roadmaps for project ${projectId} retrieved successfully` : `Failed to retrieve roadmaps for project ${projectId}`,
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? `Roadmaps for project ${projectId} retrieved successfully`
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : `Failed to retrieve roadmaps for project ${projectId}`),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   async getRoadmapById(roadmapId: string): Promise<GetRoadmapResponse> {
     const response = await this.makeRequest(`/roadmaps/${roadmapId}`, { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { roadmap: response.data.roadmap || null },
-      message: response.status === 200 ? `Roadmap ${roadmapId} retrieved successfully` : `Failed to retrieve roadmap ${roadmapId}`,
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? `Roadmap ${roadmapId} retrieved successfully`
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : `Failed to retrieve roadmap ${roadmapId}`),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   // Chat methods
   async getChats(roadmapId: string): Promise<ListChatsResponse> {
     const response = await this.makeRequest(`/roadmaps/${roadmapId}/chats`, { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { chats: response.data.chats || [] },
-      message: response.status === 200 ? `Chats for roadmap ${roadmapId} retrieved successfully` : `Failed to retrieve chats for roadmap ${roadmapId}`,
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? `Chats for roadmap ${roadmapId} retrieved successfully`
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : `Failed to retrieve chats for roadmap ${roadmapId}`),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   async getChatById(chatId: string): Promise<GetChatResponse> {
     const response = await this.makeRequest(`/chats/${chatId}`, { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { chat: response.data.chat || null },
-      message: response.status === 200 ? `Chat ${chatId} retrieved successfully` : `Failed to retrieve chat ${chatId}`,
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? `Chat ${chatId} retrieved successfully`
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : `Failed to retrieve chat ${chatId}`),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
@@ -560,6 +653,7 @@ export class APIClient {
 
     // Split the input text into words for streaming simulation
     const words = text.split(' ');
+    let chunkIndex = 0;
 
     for (const word of words) {
       // Simulate delay between tokens
@@ -567,7 +661,8 @@ export class APIClient {
       yield {
         event: 'token',
         content: word + ' ',
-        messageId: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        messageId: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        chunkIndex: chunkIndex++
       };
     }
 
@@ -578,7 +673,8 @@ export class APIClient {
     yield {
       event: 'done',
       content: '',
-      messageId: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      messageId: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      chunkIndex: chunkIndex  // Final chunk index
     };
   }
 
@@ -737,63 +833,135 @@ export class APIClient {
   // Debug Process methods
   async getProcesses(): Promise<ListProcessesResponse> {
     const response = await this.makeRequest('/debug/processes', { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { processes: response.data.processes || [] },
-      message: response.status === 200 ? 'Processes retrieved successfully' : 'Failed to retrieve processes',
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? 'Processes retrieved successfully'
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : 'Failed to retrieve processes'),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   async getProcessById(id: string): Promise<GetProcessResponse> {
     const response = await this.makeRequest(`/debug/processes/${id}`, { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { process: response.data.process || null },
-      message: response.status === 200 ? `Process ${id} retrieved successfully` : response.data.message || `Failed to retrieve process ${id}`,
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? `Process ${id} retrieved successfully`
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : response.data.message || `Failed to retrieve process ${id}`),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   // Debug WebSocket methods
   async getWebSockets(): Promise<ListWebSocketsResponse> {
     const response = await this.makeRequest('/debug/websockets', { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { websockets: response.data.websockets || [] },
-      message: response.status === 200 ? 'WebSockets retrieved successfully' : 'Failed to retrieve WebSockets',
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? 'WebSockets retrieved successfully'
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : 'Failed to retrieve WebSockets'),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   async getWebSocketById(id: string): Promise<GetWebSocketResponse> {
     const response = await this.makeRequest(`/debug/websockets/${id}`, { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { websocket: response.data.websocket || null },
-      message: response.status === 200 ? `WebSocket ${id} retrieved successfully` : response.data.message || `Failed to retrieve WebSocket ${id}`,
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? `WebSocket ${id} retrieved successfully`
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : response.data.message || `Failed to retrieve WebSocket ${id}`),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   // Debug Poll Session methods
   async getPollSessions(): Promise<ListPollSessionsResponse> {
     const response = await this.makeRequest('/debug/poll-sessions', { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { pollSessions: response.data.pollSessions || [] },
-      message: response.status === 200 ? 'Poll sessions retrieved successfully' : 'Failed to retrieve poll sessions',
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? 'Poll sessions retrieved successfully'
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : 'Failed to retrieve poll sessions'),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 
   async getPollSessionById(id: string): Promise<GetPollSessionResponse> {
     const response = await this.makeRequest(`/debug/poll-sessions/${id}`, { method: 'GET', headers: {} });
+    const isAuthError = response.status === 401 || response.status === 403;
+
     return {
-      status: response.status === 200 ? 'ok' : 'error',
+      status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
       data: { pollSession: response.data.pollSession || null },
-      message: response.status === 200 ? `Poll session ${id} retrieved successfully` : response.data.message || `Failed to retrieve poll session ${id}`,
-      errors: response.status === 200 ? [] : [{ message: response.data.message }]
+      message: response.status === 200
+        ? `Poll session ${id} retrieved successfully`
+        : (isAuthError
+          ? 'Authentication required or invalid token'
+          : response.data.message || `Failed to retrieve poll session ${id}`),
+      errors: response.status === 200
+        ? []
+        : [{
+          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          message: response.data.message,
+          code: response.status
+        }]
     };
   }
 

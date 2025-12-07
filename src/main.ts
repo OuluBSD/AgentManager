@@ -18,7 +18,8 @@ enum ExitCode {
   ValidationError = 2,
   MissingContext = 3,
   APIError = 4,
-  StreamingInterruption = 5
+  AuthError = 5,
+  StreamingInterruption = 6
 }
 
 async function main(): Promise<void> {
@@ -62,6 +63,9 @@ async function main(): Promise<void> {
               break;
             case 'API_ERROR':
               exitCode = ExitCode.APIError;
+              break;
+            case 'AUTH_ERROR':
+              exitCode = ExitCode.AuthError;
               break;
             case 'STREAM_INTERRUPTED':
               exitCode = ExitCode.StreamingInterruption;

@@ -16,6 +16,9 @@ export class ProjectListHandler implements CommandHandler {
 
       if (response.status === 'error') {
         throw new Error(`Failed to retrieve projects: ${response.message}`);
+      } else if (response.status === 'auth_error') {
+        // Handle authentication error specifically
+        throw new Error(`Authentication error: ${response.message}`);
       }
 
       // Filter projects if filter flag is provided
@@ -34,7 +37,8 @@ export class ProjectListHandler implements CommandHandler {
       }
 
       return {
-        projects
+        projects,
+        count: projects.length
       };
     } catch (error) {
       throw new Error(`Failed to list projects: ${error instanceof Error ? error.message : 'Unknown error'}`);
