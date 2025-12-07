@@ -1,10 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useMemo, useRef, useState } from "react";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
 import typescript from "highlight.js/lib/languages/typescript";
 import python from "highlight.js/lib/languages/python";
+import c from "highlight.js/lib/languages/c";
+import cpp from "highlight.js/lib/languages/cpp";
+import go from "highlight.js/lib/languages/go";
+import java from "highlight.js/lib/languages/java";
+import php from "highlight.js/lib/languages/php";
+import ruby from "highlight.js/lib/languages/ruby";
+import rust from "highlight.js/lib/languages/rust";
 import json from "highlight.js/lib/languages/json";
 import css from "highlight.js/lib/languages/css";
 import xml from "highlight.js/lib/languages/xml"; // for HTML
@@ -12,10 +20,25 @@ import bash from "highlight.js/lib/languages/bash";
 import markdown from "highlight.js/lib/languages/markdown";
 import yaml from "highlight.js/lib/languages/yaml";
 
+const MonacoEditor = dynamic(
+  async () => {
+    const mod = await import("@monaco-editor/react");
+    return mod.default;
+  },
+  { ssr: false, loading: () => <div className="item-subtle">Loading code editor…</div> }
+);
+
 // Register languages
 hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("typescript", typescript);
 hljs.registerLanguage("python", python);
+hljs.registerLanguage("c", c);
+hljs.registerLanguage("cpp", cpp);
+hljs.registerLanguage("go", go);
+hljs.registerLanguage("java", java);
+hljs.registerLanguage("php", php);
+hljs.registerLanguage("ruby", ruby);
+hljs.registerLanguage("rust", rust);
 hljs.registerLanguage("json", json);
 hljs.registerLanguage("css", css);
 hljs.registerLanguage("xml", xml);
@@ -31,6 +54,7 @@ type CodeViewerProps = {
   onChange?: (content: string) => void;
   wrapLines?: boolean;
   fullHeight?: boolean;
+  useEnhancedEditor?: boolean;
 };
 
 function detectLanguage(filePath: string): string | undefined {
@@ -41,6 +65,20 @@ function detectLanguage(filePath: string): string | undefined {
     ts: "typescript",
     tsx: "typescript",
     py: "python",
+    c: "c",
+    h: "c",
+    cc: "cpp",
+    cp: "cpp",
+    cpp: "cpp",
+    cxx: "cpp",
+    hh: "cpp",
+    hpp: "cpp",
+    hxx: "cpp",
+    go: "go",
+    java: "java",
+    php: "php",
+    rb: "ruby",
+    rs: "rust",
     json: "json",
     css: "css",
     scss: "css",
@@ -62,14 +100,16 @@ export function CodeViewer({
   onChange,
   wrapLines = false,
   fullHeight = false,
+  useEnhancedEditor = false,
 }: CodeViewerProps) {
   const codeRef = useRef<HTMLElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [mode, setMode] = useState<"view" | "edit">(readOnly ? "view" : "edit");
+  const language = useMemo(() => detectLanguage(filePath), [filePath]);
 
   useEffect(() => {
+    if (useEnhancedEditor) return;
     if (mode === "view" && codeRef.current) {
-      const language = detectLanguage(filePath);
       if (language) {
         try {
           const result = hljs.highlight(content, { language });
@@ -82,7 +122,60 @@ export function CodeViewer({
         codeRef.current.textContent = content;
       }
     }
-  }, [content, filePath, mode]);
+  }, [content, filePath, language, mode, useEnhancedEditor]);
+
+  const whiteSpaceMode = wrapLines ? "pre-wrap" : "pre";
+  const effectiveReadOnly = readOnly || mode === "view";
+
+  if (useEnhancedEditor) {
+    const height = fullHeight ? "100%" : "520px";
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.5rem",
+          width: "100%",
+          height: fullHeight ? "100%" : undefined,
+          minHeight: 0,
+        }}
+      >
+        {!readOnly && (
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setMode((prev) => (prev === "view" ? "edit" : "view"))}
+              style={{ fontSize: "0.75rem" }}
+            >
+              {mode === "view" ? "Switch to Edit Mode" : "Switch to View Mode"}
+            </button>
+          </div>
+        )}
+        <MonacoEditor
+          language={language}
+          theme="vs-dark"
+          height={height}
+          value={content}
+          path={filePath || undefined}
+          onChange={(value) => onChange?.(value ?? "")}
+          options={{
+            readOnly: effectiveReadOnly,
+            wordWrap: wrapLines ? "on" : "off",
+            minimap: { enabled: false },
+            fontFamily:
+              "'SFMono-Regular', 'JetBrains Mono', Consolas, 'Liberation Mono', Menlo, monospace",
+            fontSize: 13,
+            scrollBeyondLastLine: false,
+            automaticLayout: true,
+            renderWhitespace: "selection",
+            padding: { top: 12, bottom: 12 },
+          }}
+          loading={<div className="item-subtle">Loading code editor…</div>}
+        />
+      </div>
+    );
+  }
 
   if (mode === "edit" && !readOnly) {
     return (
@@ -124,8 +217,6 @@ export function CodeViewer({
       </div>
     );
   }
-
-  const whiteSpaceMode = wrapLines ? "pre-wrap" : "pre";
 
   return (
     <div

@@ -8,6 +8,7 @@ import { roadmapRoutes } from "./roadmaps";
 import { templateRoutes } from "./templates";
 import { terminalRoutes } from "./terminal";
 import { aiChatRoutes } from "./ai-chat";
+import { aiChatPollingRoutes } from "./ai-chat-polling";
 import { serverRoutes } from "./servers";
 import { debugRoutes } from "./debug";
 import { userSettingsRoutes } from "./user-settings";
@@ -22,6 +23,7 @@ export const registerRoutes: FastifyPluginAsync = async (fastify) => {
   await fastify.register(terminalRoutes);
   await fastify.register(auditRoutes);
   await fastify.register(aiChatRoutes);
+  await fastify.register(aiChatPollingRoutes); // HTTP polling fallback
   await fastify.register(serverRoutes);
   await fastify.register(userSettingsRoutes);
   await fastify.register(debugRoutes);

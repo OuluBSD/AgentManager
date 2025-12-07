@@ -34,6 +34,10 @@ export function Terminal({
   const onDataDisposableRef = useRef<{ dispose: () => void } | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastSequenceRef = useRef<number>(0);
+  const lastSentResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const pendingResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isAttached, setIsAttached] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -50,6 +54,7 @@ export function Terminal({
     try {
       const data = await createTerminalSession(sessionToken, projectId);
       setSessionId(data.sessionId);
+      sessionIdRef.current = data.sessionId;
       const providedCandidates = Array.isArray(data.wsCandidates) ? data.wsCandidates : [];
       serverCandidatesRef.current = providedCandidates;
       setServerWsCandidates(providedCandidates);
@@ -60,6 +65,72 @@ export function Terminal({
       return null;
     }
   }, [onSessionCreated, projectId, sessionToken]);
+
+  const sendResize = useCallback(
+    async (cols: number, rows: number) => {
+      const sid = sessionIdRef.current;
+      if (!sid || !sessionToken) return;
+
+      const safeCols = Math.max(10, Math.min(Math.round(cols), 400));
+      const safeRows = Math.max(5, Math.min(Math.round(rows), 200));
+      const last = lastSentResizeRef.current;
+      if (last && last.cols === safeCols && last.rows === safeRows) return;
+
+      try {
+        await fetch(`/api/terminal/sessions/${sid}/resize`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ cols: safeCols, rows: safeRows }),
+        });
+        lastSentResizeRef.current = { cols: safeCols, rows: safeRows };
+      } catch (err) {
+        console.warn("[Terminal] Failed to send resize", err);
+      }
+    },
+    [sessionToken]
+  );
+
+  const queueResizeUpdate = useCallback(() => {
+    if (!xtermRef.current || !sessionIdRef.current) return;
+    const cols = xtermRef.current.cols;
+    const rows = xtermRef.current.rows;
+    if (!cols || !rows) return;
+
+    const last = lastSentResizeRef.current;
+    if (last && last.cols === cols && last.rows === rows) return;
+
+    pendingResizeRef.current = { cols, rows };
+    if (resizeTimeoutRef.current) return;
+
+    resizeTimeoutRef.current = setTimeout(() => {
+      resizeTimeoutRef.current = null;
+      const payload = pendingResizeRef.current;
+      pendingResizeRef.current = null;
+      if (!payload) return;
+      sendResize(payload.cols, payload.rows);
+    }, 150);
+  }, [sendResize]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+    if (sessionId) {
+      lastSentResizeRef.current = null;
+    }
+    if (sessionId && xtermRef.current) {
+      queueResizeUpdate();
+    }
+  }, [queueResizeUpdate, sessionId]);
+
+  useEffect(() => {
+    return () => {
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Attach using polling (fallback when WebSocket fails)
   const attachSessionPolling = useCallback(
@@ -73,6 +144,7 @@ export function Terminal({
       setIsConnecting(false);
       setError(null);
       lastSequenceRef.current = 0;
+      queueResizeUpdate();
 
       if (xtermRef.current) {
         xtermRef.current.write("\r\n[Connected via polling mode]\r\n");
@@ -157,7 +229,7 @@ export function Terminal({
       pollingIntervalRef.current = setInterval(poll, 200);
       poll(); // Initial poll
     },
-    [onSessionClosed, sessionToken]
+    [onSessionClosed, queueResizeUpdate, sessionToken]
   );
 
   // Attach to terminal session via WebSocket
@@ -210,6 +282,7 @@ export function Terminal({
           setIsAttached(true);
           setIsConnecting(false);
           setError(null);
+          queueResizeUpdate();
 
           if (xtermRef.current) {
             onDataDisposableRef.current?.dispose();
@@ -284,7 +357,7 @@ export function Terminal({
 
       tryConnect(0);
     },
-    [attachSessionPolling, onSessionClosed, serverWsCandidates, sessionToken]
+    [attachSessionPolling, onSessionClosed, queueResizeUpdate, serverWsCandidates, sessionToken]
   );
 
   // Detach from terminal session
@@ -306,6 +379,12 @@ export function Terminal({
     setIsAttached(false);
     setUsingPolling(false);
     lastSequenceRef.current = 0;
+    lastSentResizeRef.current = null;
+    pendingResizeRef.current = null;
+    if (resizeTimeoutRef.current) {
+      clearTimeout(resizeTimeoutRef.current);
+      resizeTimeoutRef.current = null;
+    }
   };
 
   // Load settings from backend or localStorage
@@ -417,10 +496,23 @@ export function Terminal({
         xterm.loadAddon(fitAddon);
 
         xterm.open(terminalRef.current);
-        fitAddon.fit();
+        xterm.attachCustomKeyEventHandler((event) => {
+          if (
+            event.key === "ArrowUp" ||
+            event.key === "ArrowDown" ||
+            event.key === "ArrowLeft" ||
+            event.key === "ArrowRight"
+          ) {
+            event.preventDefault();
+          }
+          return true;
+        });
 
         xtermRef.current = xterm;
         fitAddonRef.current = fitAddon;
+        fitAddon.fit();
+        xterm.focus();
+        queueResizeUpdate();
 
         // Reattach WebSocket if still connected
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -435,6 +527,7 @@ export function Terminal({
         resizeObserver = new ResizeObserver(() => {
           if (fitAddonRef.current) {
             fitAddonRef.current.fit();
+            queueResizeUpdate();
           }
         });
         resizeObserver.observe(terminalRef.current);
@@ -458,7 +551,11 @@ export function Terminal({
         fitAddonRef.current = null;
       }
     };
-  }, [settings]);
+  }, [queueResizeUpdate, settings]);
+
+  // Use ref for callback to avoid dependency issues
+  const onSessionClosedRef = useRef(onSessionClosed);
+  onSessionClosedRef.current = onSessionClosed;
 
   // Cleanup on unmount
   useEffect(() => {
@@ -471,9 +568,9 @@ export function Terminal({
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
-      onSessionClosed?.();
+      onSessionClosedRef.current?.();
     };
-  }, [onSessionClosed]);
+  }, []); // Empty deps - only run on mount/unmount
 
   const handlePlay = useCallback(async () => {
     if (isAttached) return;
@@ -489,7 +586,7 @@ export function Terminal({
     } else {
       setIsConnecting(false);
     }
-  }, [attachSession, createSession, isAttached, isConnecting, sessionId]);
+  }, [attachSession, createSession, isAttached, sessionId]);
 
   // useEffect to trigger auto-connect
   useEffect(() => {
@@ -660,6 +757,7 @@ export function Terminal({
         {/* Terminal layer */}
         <div
           ref={terminalRef}
+          onClick={() => xtermRef.current?.focus()}
           style={{
             position: "relative",
             zIndex: 1,

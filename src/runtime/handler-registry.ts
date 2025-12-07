@@ -1,19 +1,28 @@
 // src/runtime/handler-registry.ts
 // Command handler registry
 
+import { ExecutionContext } from './types';
+
 export interface CommandHandler {
-  execute(context: any): Promise<any>;
-  validate(args: any): any;
+  execute(context: ExecutionContext): Promise<any>;
+}
+
+// Define a map to store command handlers by commandId
+interface HandlerMap {
+  [commandId: string]: CommandHandler;
 }
 
 export class HandlerRegistry {
-  register(namespace: string, resource: string, action: string, handler: CommandHandler): void {
-    // Placeholder implementation
-    throw new Error('HandlerRegistry not implemented');
+  private handlers: HandlerMap = {};
+
+  register(commandId: string, handler: CommandHandler): void {
+    this.handlers[commandId] = handler;
   }
 
-  findHandler(commandPath: string[]): CommandHandler | null {
-    // Placeholder implementation
-    throw new Error('findHandler not implemented');
+  findHandler(commandId: string): CommandHandler | null {
+    return this.handlers[commandId] || null;
   }
 }
+
+// Singleton instance
+export const handlerRegistry = new HandlerRegistry();

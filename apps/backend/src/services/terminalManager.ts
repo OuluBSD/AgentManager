@@ -18,6 +18,8 @@ type ManagedSession = {
   cwd?: string;
   ptyProcess: pty.IPty;
   proc?: ChildProcessWithoutNullStreams; // For compatibility with processLogger
+  cols: number;
+  rows: number;
   createdAt: Date;
   hasWebSocketConnection: boolean;
   outputBuffer: OutputChunk[];
@@ -107,6 +109,8 @@ export async function createTerminalSession(
     projectId,
     cwd: workingDir,
     ptyProcess,
+    cols: 80,
+    rows: 24,
     createdAt: new Date(),
     hasWebSocketConnection: false,
     outputBuffer: [],
@@ -237,4 +241,28 @@ export function getOutputSince(sessionId: string, sinceSequence: number) {
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
   };
+}
+
+export function resizeTerminalSession(sessionId: string, cols: number, rows: number) {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+
+  const safeCols = Math.max(10, Math.min(cols, 400));
+  const safeRows = Math.max(5, Math.min(rows, 200));
+
+  try {
+    session.ptyProcess.resize(safeCols, safeRows);
+    session.cols = safeCols;
+    session.rows = safeRows;
+    console.log(
+      `\x1b[36m[Terminal]\x1b[0m Resized session \x1b[33m${sessionId.substring(0, 8)}\x1b[0m to ${safeCols}x${safeRows}`
+    );
+    return true;
+  } catch (err) {
+    console.error(
+      `\x1b[36m[Terminal]\x1b[0m Failed to resize session ${sessionId.substring(0, 8)} to ${safeCols}x${safeRows}`,
+      err
+    );
+    return false;
+  }
 }

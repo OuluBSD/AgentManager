@@ -1,20 +1,16 @@
 /**
- * Hook for managing AI Chat backend connections
- * Connects to AI backends via backend API proxy
+ * Hook for managing AI Chat backend connections - V2 with proper architecture
+ * Uses MessageStore for clean state management
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AIBackendType } from "@nexus/shared/chat";
 import { resolveBackendBase, toWebSocketBase } from "../lib/backendBase";
+import { MessageStore, type Message } from "../lib/messageStore";
+import { PollingConnection } from "../lib/pollingConnection";
 
-export interface ChatMessage {
-  id: number;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  timestamp: number;
-  metadata?: Record<string, unknown>;
-  displayRole?: string;
-}
+// Use HTTP polling by default until WebSocket issues are resolved
+const USE_POLLING = process.env.NEXT_PUBLIC_USE_POLLING !== "false";
 
 export type ChatStatus = "idle" | "connecting" | "responding" | "error";
 
@@ -26,7 +22,7 @@ interface UseAIChatBackendOptions {
   disableFilesystem?: boolean;
   allowChallenge?: boolean;
   workspacePath?: string | null;
-  initialMessages?: ChatMessage[];
+  initialMessages?: any[];
   onAssistantMessage?: (payload: { content: string; final: boolean }) => void;
   onStatusChange?: (payload: { status: ChatStatus; message?: string; context?: string }) => void;
   onInfo?: (payload: { message?: string; raw?: any }) => void;
@@ -46,370 +42,469 @@ interface UseAIChatBackendOptions {
   }) => void;
 }
 
-function formatToolCall(
-  tool: any,
-  opts?: { autoApproved?: boolean }
-): { label: string; content: string } {
-  const rawLabel = (typeof tool?.tool_name === "string" && tool.tool_name.trim()) || "tool";
-  // Replace underscores with spaces and handle special cases
-  let label = rawLabel;
-  if (rawLabel.toLowerCase().includes("shell") || rawLabel.toLowerCase().includes("bash")) {
-    label = "Shell";
-  } else {
-    // Replace underscores with spaces for better readability
-    label = rawLabel.replace(/_/g, " ");
-  }
-
-  const requiresApproval =
-    tool?.confirmation_details?.requires_approval || tool?.requires_approval || false;
-  const args = (tool && typeof tool === "object" && tool.args) || {};
-
-  // Format arguments intelligently
-  let argPreview = "";
-
-  // Handle common command patterns
-  const primaryArg =
-    typeof args.command === "string"
-      ? args.command
-      : typeof args.cmd === "string"
-        ? args.cmd
-        : typeof args.input === "string"
-          ? args.input
-          : null;
-
-  if (primaryArg) {
-    argPreview = primaryArg;
-  } else if (args && typeof args === "object" && Object.keys(args).length > 0) {
-    // Check for predictable single-key patterns
-    const keys = Object.keys(args);
-    if (keys.length === 1) {
-      const key = keys[0];
-      const value = args[key];
-      if (typeof value === "string") {
-        // Format single key-value pairs nicely
-        argPreview = value;
-      } else {
-        argPreview = JSON.stringify(args, null, 2);
-      }
-    } else {
-      argPreview = JSON.stringify(args, null, 2);
-    }
-  }
-
-  const approvalText = requiresApproval && !opts?.autoApproved ? "(awaiting approval)" : "";
-
-  // Don't show "Running" status - just show args or approval text
-  let content = "";
-  if (approvalText) {
-    content = approvalText;
-  }
-  if (argPreview) {
-    content = content ? `${content}\n${argPreview}` : argPreview;
-  }
-
-  return { label, content: content || "" };
-}
-
-function stripStatus(label: string): string {
-  return label.replace(/\s*\([^)]*\)\s*$/, "").trim() || label;
-}
-
-function markToolContentAsDone(content: string): string {
-  const lines = content.split("\n");
-  if (lines.length === 0) return content;
-  const header = lines[0];
-  const rest = lines.slice(1).join("\n");
-  let updatedHeader: string;
-  if (/\[pending]/i.test(header) || /\[waiting/i.test(header)) {
-    updatedHeader = header.replace(/\[(pending|waiting[^)]*)]/i, "[done]");
-  } else if (!/\[done]/i.test(header)) {
-    updatedHeader = `${header} [done]`;
-  } else {
-    updatedHeader = header;
-  }
-  return rest ? `${updatedHeader}\n${rest}` : updatedHeader;
-}
-
 export function useAIChatBackend(options: UseAIChatBackendOptions) {
-  const [messages, setMessages] = useState<ChatMessage[]>(options.initialMessages || []);
+  // Single source of truth for messages
+  const messageStore = useRef(new MessageStore());
+
+  // UI state
+  const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [statusContext, setStatusContext] = useState<string | undefined>(undefined);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [isConnected, setIsConnected] = useState(false);
-  const nextMessageId = useRef(1);
-  const wsRef = useRef<WebSocket | null>(null);
+
+  // Connection state
+  const wsRef = useRef<WebSocket | PollingConnection | null>(null);
   const autoApprovedToolsRef = useRef<Set<string>>(new Set());
-  const connectionIdRef = useRef<string | null>(null); // Will be set on each connect
-  const streamingContentRef = useRef("");
-  const optionsRef = useRef(options);
   const pendingMessagesRef = useRef<string[]>([]);
-  const lastToolMessageId = useRef<number | null>(null);
-  const toolPendingRef = useRef(false);
-  const lastToolSnapshotRef = useRef<{ content: string; displayRole?: string } | null>(null);
-  const lastStreamingChunkRef = useRef("");
-  const lastAssistantFinalRef = useRef("");
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastErrorTimeRef = useRef<number>(0);
+  const maxReconnectAttempts = 5;
+  const baseReconnectDelay = 1000; // 1 second
+  const errorCooldown = 5000; // 5 second cooldown between error messages
 
-  useEffect(() => {
-    optionsRef.current = options;
-  }, [options]);
+  // Store callback refs to avoid dependency issues
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
-  // Reset local state when switching sessions so each tab keeps its own history
+  // Sync UI with message store - use ref pattern to avoid dependency issues
+  const syncMessagesRef = useRef<() => void>();
+  syncMessagesRef.current = () => {
+    setMessages(messageStore.current.getMessages());
+    const { content, isStreaming: streaming } = messageStore.current.getStreamingContent();
+    setStreamingContent(content);
+    setIsStreaming(streaming);
+  };
+
+  const syncMessages = useCallback(() => {
+    syncMessagesRef.current?.();
+  }, []);
+
+  // Reset when switching sessions
   useEffect(() => {
-    const initial = optionsRef.current.initialMessages || [];
-    setMessages(initial);
-    const maxId = initial.reduce((max, msg) => Math.max(max, msg.id || 0), 0);
-    nextMessageId.current = maxId + 1;
+    console.log("[useAIChatBackend] Session changed, resetting state");
+
+    // Disconnect existing connection first
+    if (wsRef.current) {
+      const ws = wsRef.current;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.close(1000, "Session changed");
+      }
+      wsRef.current = null;
+    }
+
+    // Clear reconnect state
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    reconnectAttemptsRef.current = 0;
+    lastErrorTimeRef.current = 0;
+
+    messageStore.current.clear();
+    syncMessagesRef.current?.();
     setStatus("idle");
     setStatusMessage("");
     setStatusContext(undefined);
-    setIsStreaming(false);
-    setStreamingContent("");
-    streamingContentRef.current = "";
     pendingMessagesRef.current = [];
-    lastToolMessageId.current = null;
-    lastToolSnapshotRef.current = null;
-    toolPendingRef.current = false;
-    autoApprovedToolsRef.current = new Set();
+    autoApprovedToolsRef.current.clear();
     setIsConnected(false);
-  }, [options.sessionId]);
+  }, [options.sessionId]); // Only depend on sessionId
 
   // Connect to backend via WebSocket
   const connect = useCallback(() => {
-    // Generate a new connection ID for each connection attempt
-    const newConnectionId = `ws-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    connectionIdRef.current = newConnectionId;
+    const opts = optionsRef.current;
 
-    console.log(
-      "[useAIChatBackend] connect() called, new connectionId:",
-      newConnectionId,
-      "wsRef.current:",
-      wsRef.current
-    );
-    setIsConnected(false);
-    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
-      console.log("[useAIChatBackend] Already connected or connecting, returning");
+    // Clear any pending reconnect timeout
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    // Check if already connected or connecting
+    if (wsRef.current) {
+      const state = wsRef.current.readyState;
+      // WebSocket.CLOSED = 3, don't try to reconnect if already open/connecting/closing
+      if (state === WebSocket.OPEN || state === WebSocket.CONNECTING || state === WebSocket.CLOSING) {
+        console.log("[useAIChatBackend] Already connected or connecting, state:", state);
+        return;
+      }
+    }
+
+    // Check if max reconnect attempts exceeded
+    if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+      const now = Date.now();
+      const timeSinceLastError = now - lastErrorTimeRef.current;
+
+      // Only log error once every 5 seconds to prevent console flooding
+      if (timeSinceLastError > errorCooldown) {
+        console.error(
+          `[useAIChatBackend] Max reconnect attempts (${maxReconnectAttempts}) exceeded`
+        );
+        lastErrorTimeRef.current = now;
+      }
+
+      setStatus("error");
+      setStatusMessage(
+        `Connection failed after ${maxReconnectAttempts} attempts. Please check your connection and try again.`
+      );
       return;
     }
 
-    console.log("[useAIChatBackend] Starting connection...");
+    reconnectAttemptsRef.current++;
+    const attemptNumber = reconnectAttemptsRef.current;
+    console.log(
+      `[useAIChatBackend] Connection attempt ${attemptNumber}/${maxReconnectAttempts}`
+    );
+
     setStatus("connecting");
-    setStatusMessage(`Connecting to ${options.backend}...`);
+    setStatusMessage(
+      attemptNumber > 1
+        ? `Reconnecting (${attemptNumber}/${maxReconnectAttempts})...`
+        : `Connecting to ${opts.backend}...`
+    );
 
-    // WebSocket endpoint for AI chat
     const backendUrl = resolveBackendBase();
-    const wsBase = toWebSocketBase(backendUrl);
-    // Use the sessionId directly - the backend session manager handles multiple connections
-    // with reference counting, so we don't need to create unique session IDs per connection
-    const challengeParam =
-      options.allowChallenge === false ? "false" : options.allowChallenge === true ? "true" : "";
-    const workspaceParam =
-      options.workspacePath && options.workspacePath.trim()
-        ? `&workspace=${encodeURIComponent(options.workspacePath.trim())}`
-        : "";
-    const wsUrl = `${wsBase}/api/ai-chat/${options.sessionId}?backend=${
-      options.backend
-    }&token=${options.token}${
-      challengeParam ? `&challenge=${encodeURIComponent(challengeParam)}` : ""
-    }${workspaceParam}`;
 
-    if (options.disableTools) {
-      // Add query param (will be implemented in backend)
+    let ws: WebSocket | PollingConnection;
+
+    if (USE_POLLING) {
+      // Use HTTP polling
+      console.log("[useAIChatBackend] Using HTTP polling (WebSocket disabled)");
+      ws = new PollingConnection({
+        sessionId: opts.sessionId,
+        token: opts.token,
+        backend: opts.backend,
+        allowChallenge: opts.allowChallenge,
+        workspacePath: opts.workspacePath,
+        pollInterval: 500, // Poll every 500ms
+      });
+    } else {
+      // Use WebSocket
+      const wsBase = toWebSocketBase(backendUrl);
+      const challengeParam =
+        opts.allowChallenge === false ? "false" : opts.allowChallenge === true ? "true" : "";
+      const workspaceParam =
+        opts.workspacePath?.trim()
+          ? `&workspace=${encodeURIComponent(opts.workspacePath.trim())}`
+          : "";
+      const wsUrl = `${wsBase}/api/ai-chat/${opts.sessionId}?backend=${
+        opts.backend
+      }&token=${opts.token}${
+        challengeParam ? `&challenge=${encodeURIComponent(challengeParam)}` : ""
+      }${workspaceParam}`;
+
+      ws = new WebSocket(wsUrl);
     }
 
-    console.log("[useAIChatBackend] Creating WebSocket:", wsUrl);
-    const ws = new WebSocket(wsUrl);
-
     ws.onopen = () => {
-      console.log("[useAIChatBackend] WebSocket opened");
+      console.log("[useAIChatBackend] Connection opened successfully (polling:", USE_POLLING, ")");
+
+      // Check if we've been replaced by another connection attempt
+      if (wsRef.current && wsRef.current !== ws) {
+        console.log("[useAIChatBackend] Connection replaced, closing this one");
+        ws.close();
+        return;
+      }
+
+      // Reset reconnect attempts on successful connection
+      reconnectAttemptsRef.current = 0;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
       setStatus("idle");
       setStatusMessage("Connected");
-      setStatusContext(undefined);
       setIsConnected(true);
       wsRef.current = ws;
-      // Flush any queued user messages
-      if (pendingMessagesRef.current.length) {
-        pendingMessagesRef.current.forEach((queued) => {
-          try {
-            ws.send(
-              JSON.stringify({
-                type: "user_input",
-                content: queued,
-              })
-            );
-          } catch (err) {
-            console.error("Failed to send queued message:", err);
-          }
-        });
-        pendingMessagesRef.current = [];
-      }
+
+      // Flush queued messages
+      pendingMessagesRef.current.forEach((queued) => {
+        ws.send(JSON.stringify({ type: "user_input", content: queued }));
+      });
+      pendingMessagesRef.current = [];
     };
 
-    ws.onmessage = (event) => {
+    ws.onmessage = (event: { data: string }) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === "conversation" && msg.role === "assistant") {
-          console.log("[useAIChatBackend] WS message:", {
-            type: msg.type,
-            role: msg.role,
-            contentLength: msg.content?.length || 0,
-            isStreaming: msg.isStreaming,
-          });
-        }
-        handleBackendMessageRef.current?.(msg);
+        handleMessage(msg);
       } catch (err) {
-        console.error("Failed to parse message:", err);
+        console.error("[useAIChatBackend] Failed to parse message:", err);
       }
     };
 
-    ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
+    ws.onerror = (error: any) => {
+      console.error("[useAIChatBackend] WebSocket error:", error);
       setStatus("error");
-      setStatusMessage("Connection error");
-      setStatusContext(undefined);
+      const attemptText =
+        reconnectAttemptsRef.current < maxReconnectAttempts
+          ? ` (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})`
+          : " (max attempts reached)";
+      setStatusMessage(`Connection error${attemptText}`);
       setIsConnected(false);
       optionsRef.current.onStatusChange?.({ status: "error", message: "Connection error" });
     };
 
-    ws.onclose = () => {
-      setStatus("idle");
-      setStatusMessage("Disconnected");
-      setStatusContext(undefined);
+    ws.onclose = (event: { code: number; reason: string }) => {
+      console.log(
+        `[useAIChatBackend] Connection closed: code=${event.code}, reason=${event.reason}`
+      );
+
+      // Check if this is still the active connection
+      if (wsRef.current !== ws) {
+        console.log("[useAIChatBackend] Closed connection was already replaced, ignoring");
+        return;
+      }
+
       setIsConnected(false);
       setIsStreaming(false);
       setStreamingContent("");
-      streamingContentRef.current = "";
       wsRef.current = null;
-      toolPendingRef.current = false;
-      lastToolMessageId.current = null;
       autoApprovedToolsRef.current.clear();
+
+      // Only attempt reconnect if:
+      // 1. Not a normal closure (code 1000)
+      // 2. Not explicitly closed by user
+      // 3. Haven't exceeded max attempts
+      const wasAbnormalClose = event.code !== 1000 && event.code !== 1005;
+      const canRetry = reconnectAttemptsRef.current < maxReconnectAttempts;
+
+      if (wasAbnormalClose && canRetry) {
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+        const delay = Math.min(
+          baseReconnectDelay * Math.pow(2, reconnectAttemptsRef.current),
+          30000 // Cap at 30 seconds
+        );
+        console.log(
+          `[useAIChatBackend] Scheduling reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1}/${maxReconnectAttempts})`
+        );
+        setStatus("error");
+        setStatusMessage(`Reconnecting in ${Math.round(delay / 1000)}s...`);
+
+        reconnectTimeoutRef.current = setTimeout(() => {
+          console.log("[useAIChatBackend] Attempting reconnect...");
+          connect();
+        }, delay);
+      } else if (!canRetry) {
+        setStatus("error");
+        setStatusMessage(
+          "Connection lost. Max reconnection attempts reached. Please refresh the page."
+        );
+      } else {
+        setStatus("idle");
+        setStatusMessage("Disconnected");
+      }
     };
-  }, [
-    options.backend,
-    options.sessionId,
-    options.token,
-    options.disableTools,
-    options.allowChallenge,
-    options.workspacePath,
-  ]);
+  }, []); // Use optionsRef.current instead of dependencies
+
+  // Handle WebSocket messages
+  const handleMessage = useCallback((msg: any) => {
+    const opts = optionsRef.current;
+
+    switch (msg.type) {
+      case "init":
+        setStatus("idle");
+        setStatusMessage("");
+        break;
+
+      case "conversation":
+        if (msg.role === "assistant") {
+          if (msg.isStreaming !== false) {
+            // Streaming chunk
+            messageStore.current.addAssistantChunk(msg.content || "");
+            syncMessages();
+            setStatusMessage("");
+            const { content } = messageStore.current.getStreamingContent();
+            opts.onAssistantMessage?.({ content, final: false });
+          } else {
+            // Finalize streaming
+            messageStore.current.finalizeAssistantMessage();
+            syncMessages();
+            setStatus("idle");
+            setStatusMessage("");
+            const messages = messageStore.current.getMessages();
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg?.role === "assistant") {
+              opts.onAssistantMessage?.({ content: lastMsg.content, final: true });
+            }
+          }
+        }
+        break;
+
+      case "status":
+        setStatusContext(typeof msg.context === "string" ? msg.context : undefined);
+        if (msg.state) {
+          const stateMap: Record<string, ChatStatus> = {
+            idle: "idle",
+            responding: "responding",
+            waiting_for_confirmation: "responding",
+          };
+          const nextStatus = stateMap[msg.state] || "idle";
+          setStatus(nextStatus);
+          opts.onStatusChange?.({
+            status: nextStatus,
+            message: msg.message,
+            context: typeof msg.context === "string" ? msg.context : undefined,
+          });
+
+          if (nextStatus === "idle") {
+            messageStore.current.completeToolExecution();
+            syncMessages();
+          }
+        }
+        if (msg.message) {
+          setStatusMessage(msg.message);
+        }
+        break;
+
+      case "error":
+        setStatus("error");
+        setStatusMessage(msg.message || "An error occurred");
+        setIsStreaming(false);
+        break;
+
+      case "tool_group":
+        if (Array.isArray(msg.tools) && msg.tools.length > 0) {
+          // Auto-approve tools
+          for (const tool of msg.tools) {
+            const toolId = tool?.tool_id;
+            const requiresApproval =
+              tool?.confirmation_details?.requires_approval || tool?.requires_approval;
+
+            if (
+              requiresApproval &&
+              typeof toolId === "string" &&
+              !autoApprovedToolsRef.current.has(toolId) &&
+              wsRef.current?.readyState === WebSocket.OPEN
+            ) {
+              wsRef.current.send(
+                JSON.stringify({
+                  type: "tool_approval",
+                  approved: true,
+                  tool_id: toolId,
+                })
+              );
+              autoApprovedToolsRef.current.add(toolId);
+            }
+          }
+
+          // Add tool message to store
+          messageStore.current.startToolExecution(msg.id.toString(), msg.tools);
+          syncMessages();
+          setStatusMessage(`Executing ${msg.tools.length} tool(s)...`);
+        }
+        break;
+
+      case "info":
+        // Tool execution output
+        if (msg.message && typeof msg.message === "string") {
+          const content = msg.message.trim();
+          if (content.length > 0) {
+            // Check if this is a status message or actual output
+            const isStatusMessage =
+              content.startsWith("Tool ") &&
+              (content.includes("executed successfully") || content.includes("failed"));
+
+            if (!isStatusMessage) {
+              messageStore.current.addToolOutput(content);
+              syncMessages();
+            }
+          }
+        }
+        if (msg.message) {
+          setStatusMessage(msg.message);
+        }
+        opts.onInfo?.({ message: msg.message, raw: msg });
+        break;
+
+      case "completion_stats":
+        setIsStreaming(false);
+        setStatus("idle");
+        setStatusMessage("Ready");
+        messageStore.current.completeToolExecution();
+        syncMessages();
+
+        // Call completion stats callback
+        const toNumber = (value: any) =>
+          typeof value === "number" && Number.isFinite(value) ? value : undefined;
+        opts.onCompletionStats?.({
+          promptTokens: toNumber(msg.prompt_tokens),
+          completionTokens: toNumber(msg.completion_tokens),
+          totalTokens: toNumber(msg.total_tokens),
+          contextLimit: toNumber(msg.context_window) ?? toNumber(msg.context_limit),
+          contextRemaining: toNumber(msg.context_tokens_left) ?? toNumber(msg.context_remaining),
+          raw: msg,
+        });
+        break;
+    }
+  }, [syncMessages]); // Keep syncMessages but it's stable now
 
   // Disconnect from backend
   const disconnect = useCallback(() => {
-    return new Promise<void>((resolve) => {
-      console.log("[useAIChatBackend] disconnect() called, current ws:", wsRef.current?.readyState);
-      if (wsRef.current) {
-        const ws = wsRef.current;
+    console.log("[useAIChatBackend] Disconnect called");
 
-        // Set up one-time close handler to resolve promise
-        const handleClose = () => {
-          console.log("[useAIChatBackend] WebSocket closed, disconnect complete");
-          resolve();
-        };
+    // Clear reconnect timeout and reset attempts
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    reconnectAttemptsRef.current = maxReconnectAttempts; // Prevent auto-reconnect
 
-        // Send disconnect message to backend BEFORE closing to immediately release session
-        if (ws.readyState === WebSocket.OPEN) {
-          try {
-            ws.send(
-              JSON.stringify({
-                type: "disconnect",
-              })
-            );
-            console.log("[useAIChatBackend] Sent disconnect message to backend");
-          } catch (err) {
-            console.error("[useAIChatBackend] Failed to send disconnect message:", err);
-          }
+    if (wsRef.current) {
+      const ws = wsRef.current;
+
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: "disconnect" }));
+        } catch (err) {
+          console.error("[useAIChatBackend] Failed to send disconnect:", err);
         }
-
-        // Remove existing event listeners
-        ws.onmessage = null;
-        ws.onerror = null;
-        ws.onopen = null;
-
-        // Set close handler to resolve promise
-        ws.onclose = handleClose;
-
-        if (ws.readyState !== WebSocket.CLOSED) {
-          ws.close();
-          // If already closing or closed, resolve immediately
-          if (ws.readyState === WebSocket.CLOSED) {
-            handleClose();
-          }
-        } else {
-          handleClose();
-        }
-
-        wsRef.current = null;
-      } else {
-        // No WebSocket to disconnect, resolve immediately
-        resolve();
       }
 
-      // Clear messages and state when disconnecting
-      setMessages([]);
-      setStreamingContent("");
-      streamingContentRef.current = "";
-      setIsStreaming(false);
-      setStatus("idle");
-      setStatusMessage("");
-      setStatusContext(undefined);
-      setIsConnected(false);
-      toolPendingRef.current = false;
-      lastToolMessageId.current = null;
-      pendingMessagesRef.current = [];
-      autoApprovedToolsRef.current.clear();
-    });
-  }, []);
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onopen = null;
+      ws.onclose = null;
+
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.close(1000, "User disconnected"); // Normal closure
+      }
+
+      wsRef.current = null;
+    }
+
+    messageStore.current.clear();
+    syncMessagesRef.current?.();
+    setStatus("idle");
+    setStatusMessage("");
+    setIsConnected(false);
+    pendingMessagesRef.current = [];
+    autoApprovedToolsRef.current.clear();
+  }, []); // No dependencies - use refs instead
 
   // Send message to backend
   const sendMessage = useCallback(
     (content: string) => {
-      const ready = wsRef.current && wsRef.current.readyState === WebSocket.OPEN;
+      const ready = wsRef.current?.readyState === WebSocket.OPEN;
 
-      const userMessage: ChatMessage = {
-        id: nextMessageId.current++,
-        role: "user",
-        content,
-        timestamp: Date.now(),
-      };
+      // Add user message to store
+      messageStore.current.addUserMessage(content);
+      syncMessagesRef.current?.();
 
-      setMessages((prev) => [...prev, userMessage]);
       setStatus("responding");
       setIsStreaming(true);
-      setStreamingContent("");
-      setStatusContext(undefined);
-      streamingContentRef.current = "";
 
       if (ready && wsRef.current) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: "user_input",
-            content,
-          })
-        );
-      } else {
-        // Queue until connection opens
-        pendingMessagesRef.current.push(content);
-        if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
-          connect();
-        }
-      }
-    },
-    [connect]
-  );
-
-  // Send a message without adding it to the visible chat log (used for session hydration)
-  const sendBackgroundMessage = useCallback(
-    (content: string) => {
-      const ready = wsRef.current && wsRef.current.readyState === WebSocket.OPEN;
-
-      if (ready && wsRef.current) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: "user_input",
-            content,
-          })
-        );
+        wsRef.current.send(JSON.stringify({ type: "user_input", content }));
       } else {
         pendingMessagesRef.current.push(content);
         if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
@@ -422,401 +517,49 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
 
   // Interrupt ongoing response
   const interrupt = useCallback(() => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      return;
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "interrupt" }));
+      messageStore.current.finalizeAssistantMessage();
+      syncMessagesRef.current?.();
+      setIsStreaming(false);
+      setStatus("idle");
+      setStatusMessage("Interrupted");
     }
+  }, []); // No dependencies - use refs instead
 
-    // Send interrupt to backend
-    wsRef.current.send(
-      JSON.stringify({
-        type: "interrupt",
-      })
-    );
-
-    // Finalize any streaming content before clearing
-    if (isStreaming && streamingContent) {
-      const assistantMessage: ChatMessage = {
-        id: nextMessageId.current++,
-        role: "assistant",
-        content: streamingContent,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
+  // Manual retry (resets reconnect attempts)
+  const retry = useCallback(() => {
+    console.log("[useAIChatBackend] Manual retry requested");
+    reconnectAttemptsRef.current = 0;
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
+    connect();
+  }, [connect]);
 
-    setIsStreaming(false);
-    setStreamingContent("");
-    streamingContentRef.current = "";
-    setStatus("idle");
-    setStatusMessage("Interrupted");
-    setStatusContext(undefined);
-  }, [isStreaming, streamingContent]);
+  // Auto-disconnect on unmount (use ref to avoid dependency issues)
+  const disconnectRef = useRef(disconnect);
+  disconnectRef.current = disconnect;
 
-  // Handle messages from backend
-  // Use useRef to avoid recreating this callback when state changes
-  const handleBackendMessageRef = useRef<(msg: any) => void>();
-
-  handleBackendMessageRef.current = (msg: any) => {
-    switch (msg.type) {
-      case "init":
-        setStatus("idle");
-        setStatusContext(undefined);
-        setStatusMessage(""); // Clear connecting message
-        break;
-
-      case "conversation":
-        if (msg.role === "assistant") {
-          if (msg.isStreaming !== false) {
-            // Streaming chunk - accumulate deltas from backend
-            const chunk = msg.content || "";
-            if (chunk && chunk === lastStreamingChunkRef.current) {
-              console.log(
-                `[useAIChatBackend:${connectionIdRef.current}] Skipping duplicate streaming chunk`
-              );
-              return;
-            }
-            lastStreamingChunkRef.current = chunk;
-            console.log(
-              `[useAIChatBackend:${connectionIdRef.current}] Streaming chunk, chunk length:`,
-              chunk.length
-            );
-            setStreamingContent((prev) => {
-              const newContent = prev + chunk;
-              console.log(
-                `[useAIChatBackend:${connectionIdRef.current}] Accumulated length:`,
-                newContent.length
-              );
-              streamingContentRef.current = newContent;
-              optionsRef.current.onAssistantMessage?.({ content: newContent, final: false });
-              return newContent;
-            });
-            setIsStreaming(true);
-            setStatusMessage(""); // Clear any tool execution messages
-          } else {
-            // Streaming ended - finalize the accumulated streaming content
-            console.log(
-              `[useAIChatBackend:${connectionIdRef.current}] Streaming ended, finalizing accumulated content`
-            );
-            setStreamingContent((prev) => {
-              console.log(
-                `[useAIChatBackend:${connectionIdRef.current}] Final accumulated length:`,
-                prev.length,
-                "Final message content length:",
-                msg.content?.length || 0
-              );
-              // Use accumulated content if available, otherwise use the final message content
-              // But never combine them to avoid duplication
-              const finalContent = prev || msg.content || "";
-              console.log(
-                `[useAIChatBackend:${connectionIdRef.current}] Using ${prev ? "accumulated" : "final message"} content`
-              );
-              if (finalContent) {
-                if (
-                  finalContent === lastAssistantFinalRef.current ||
-                  finalContent === streamingContentRef.current
-                ) {
-                  console.log(
-                    `[useAIChatBackend:${connectionIdRef.current}] Skipping duplicate final assistant content`
-                  );
-                  lastStreamingChunkRef.current = "";
-                  streamingContentRef.current = "";
-                  return "";
-                }
-                const assistantMessage: ChatMessage = {
-                  id: nextMessageId.current++,
-                  role: "assistant",
-                  content: finalContent,
-                  timestamp: Date.now(),
-                };
-                console.log(
-                  `[useAIChatBackend:${connectionIdRef.current}] Adding message to state, ID:`,
-                  assistantMessage.id
-                );
-                setMessages((msgs) => {
-                  // Deduplication: Don't add if the last message has the exact same content
-                  const lastMsg = msgs[msgs.length - 1];
-                  if (
-                    lastMsg &&
-                    lastMsg.role === "assistant" &&
-                    lastMsg.content === assistantMessage.content
-                  ) {
-                    console.log(
-                      `[useAIChatBackend:${connectionIdRef.current}] Skipping duplicate message`
-                    );
-                    return msgs;
-                  }
-                  return [...msgs, assistantMessage];
-                });
-                lastAssistantFinalRef.current = finalContent;
-              }
-              lastStreamingChunkRef.current = "";
-              streamingContentRef.current = "";
-              optionsRef.current.onAssistantMessage?.({ content: finalContent, final: true });
-              return ""; // Clear streaming content
-            });
-            setIsStreaming(false);
-            setStatus("idle");
-            setStatusContext(undefined);
-            setStatusMessage("");
-          }
-        }
-        break;
-
-      case "status":
-        setStatusContext(typeof msg.context === "string" ? msg.context : undefined);
-        if (msg.state) {
-          // Map Qwen states to our ChatStatus
-          const stateMap: Record<string, ChatStatus> = {
-            idle: "idle",
-            responding: "responding",
-            waiting_for_confirmation: "responding",
-          };
-          const nextStatus = stateMap[msg.state] || "idle";
-          setStatus(nextStatus);
-          optionsRef.current.onStatusChange?.({
-            status: nextStatus,
-            message: msg.message,
-            context: typeof msg.context === "string" ? msg.context : undefined,
-          });
-          if (nextStatus === "idle" && toolPendingRef.current) {
-            // Tool run likely finished
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === lastToolMessageId.current
-                  ? {
-                      ...m,
-                      content: markToolContentAsDone(m.content),
-                      displayRole: m.displayRole
-                        ? `${stripStatus(m.displayRole)} (done)`
-                        : "Tool (done)",
-                    }
-                  : m
-              )
-            );
-            if (lastToolMessageId.current !== null) {
-              const updated = lastToolSnapshotRef.current;
-              const doneContent = updated ? markToolContentAsDone(updated.content) : "";
-              const doneLabel = updated?.displayRole
-                ? `${stripStatus(updated.displayRole)} (done)`
-                : "Tool (done)";
-              lastToolSnapshotRef.current = { content: doneContent, displayRole: doneLabel };
-              optionsRef.current.onToolMessage?.({
-                content: doneContent,
-                displayRole: doneLabel,
-                final: true,
-                messageId: lastToolMessageId.current,
-              });
-            }
-            toolPendingRef.current = false;
-            lastToolMessageId.current = null;
-            lastToolSnapshotRef.current = null;
-          }
-        }
-        if (msg.message) {
-          setStatusMessage(msg.message);
-        }
-        break;
-
-      case "error":
-        setStatus("error");
-        setStatusMessage(msg.message || "An error occurred");
-        setStatusContext(undefined);
-        setIsStreaming(false);
-        break;
-
-      case "tool_group":
-        // If we have streaming content, finalize it first before adding tool message
-        // to ensure correct message ordering (assistant message should appear before tool message)
-        if (streamingContentRef.current) {
-          const finalContent = streamingContentRef.current;
-          if (finalContent) {
-            const assistantMessage: ChatMessage = {
-              id: nextMessageId.current++,
-              role: "assistant",
-              content: finalContent,
-              timestamp: Date.now(),
-            };
-            console.log(
-              `[useAIChatBackend:${connectionIdRef.current}] Finalizing streaming content before tool_group, ID:`,
-              assistantMessage.id
-            );
-            setMessages((msgs) => {
-              // Deduplication: Don't add if the last message has the exact same content
-              const lastMsg = msgs[msgs.length - 1];
-              if (
-                lastMsg &&
-                lastMsg.role === "assistant" &&
-                lastMsg.content === assistantMessage.content
-              ) {
-                console.log(
-                  `[useAIChatBackend:${connectionIdRef.current}] Skipping duplicate message before tool_group`
-                );
-                return msgs;
-              }
-              return [...msgs, assistantMessage];
-            });
-            optionsRef.current.onAssistantMessage?.({ content: finalContent, final: true });
-          }
-          setStreamingContent("");
-          streamingContentRef.current = "";
-          setIsStreaming(false);
-        }
-
-        // Tool execution notification
-        setStatusMessage(`Executing ${msg.tools?.length || 0} tool(s)...`);
-        const autoApproved: string[] = [];
-        if (Array.isArray((msg as any).tools)) {
-          for (const tool of (msg as any).tools) {
-            const requiresApproval =
-              tool?.confirmation_details?.requires_approval || tool?.requires_approval;
-            const toolId = tool?.tool_id;
-            if (
-              requiresApproval &&
-              typeof toolId === "string" &&
-              !autoApprovedToolsRef.current.has(toolId) &&
-              wsRef.current &&
-              wsRef.current.readyState === WebSocket.OPEN
-            ) {
-              try {
-                wsRef.current.send(
-                  JSON.stringify({
-                    type: "tool_approval",
-                    approved: true,
-                    tool_id: toolId,
-                  })
-                );
-                autoApprovedToolsRef.current.add(toolId);
-                autoApproved.push(toolId);
-                // Once approved, clear pending status for UI readability
-                if (tool.status === "pending" || tool.status === "waiting_for_confirmation") {
-                  tool.status = "running";
-                }
-              } catch (err) {
-                console.error("Failed to auto-approve tool", err);
-              }
-            }
-          }
-        }
-        if (autoApproved.length) {
-          setStatusMessage(
-            `Executing ${msg.tools?.length || 0} tool(s)... auto-approved ${autoApproved.length}`
-          );
-        }
-        if (Array.isArray((msg as any).tools) && (msg as any).tools.length > 0) {
-          const toolDetails = (msg as any).tools.map((tool: any) =>
-            formatToolCall(tool, { autoApproved: autoApprovedToolsRef.current.has(tool?.tool_id) })
-          );
-          const content = toolDetails.map((tool) => tool.content).join("\n\n");
-          const displayRole =
-            toolDetails.length === 1
-              ? toolDetails[0].label || "tool"
-              : `${toolDetails.length} tools`;
-          const toolMessage: ChatMessage = {
-            id: nextMessageId.current++,
-            role: "tool",
-            content,
-            timestamp: Date.now(),
-            displayRole,
-          };
-          setMessages((prev) => [...prev, toolMessage]);
-          lastToolMessageId.current = toolMessage.id;
-          toolPendingRef.current = true;
-          lastToolSnapshotRef.current = { content, displayRole };
-          optionsRef.current.onToolMessage?.({
-            content,
-            displayRole,
-            final: false,
-            messageId: toolMessage.id,
-          });
-        }
-        break;
-
-      case "completion_stats":
-        // Response completed - just clear status (message already finalized by conversation handler)
-        setIsStreaming(false);
-        setStatus("idle");
-        setStatusMessage("Ready");
-        setStatusContext(undefined);
-        {
-          const toNumber = (value: any) =>
-            typeof value === "number" && Number.isFinite(value) ? value : undefined;
-          const promptTokens = toNumber((msg as any).prompt_tokens);
-          const completionTokens = toNumber((msg as any).completion_tokens);
-          const totalTokens =
-            toNumber((msg as any).total_tokens) ??
-            (promptTokens !== undefined || completionTokens !== undefined
-              ? (promptTokens ?? 0) + (completionTokens ?? 0)
-              : undefined);
-          const contextLimit =
-            toNumber((msg as any).context_window) ??
-            toNumber((msg as any).context_limit) ??
-            toNumber((msg as any).contextLength);
-          const contextRemaining =
-            toNumber((msg as any).context_tokens_left) ?? toNumber((msg as any).context_remaining);
-
-          optionsRef.current.onCompletionStats?.({
-            promptTokens,
-            completionTokens,
-            totalTokens,
-            contextLimit,
-            contextRemaining,
-            raw: msg,
-          });
-        }
-        if (toolPendingRef.current) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === lastToolMessageId.current
-                ? {
-                    ...m,
-                    content: markToolContentAsDone(m.content),
-                    displayRole: m.displayRole
-                      ? `${stripStatus(m.displayRole)} (done)`
-                      : "Tool (done)",
-                  }
-                : m
-            )
-          );
-          if (lastToolMessageId.current !== null) {
-            const targetId = lastToolMessageId.current;
-            const updated = lastToolSnapshotRef.current;
-            const doneContent = updated ? markToolContentAsDone(updated.content) : "";
-            const doneLabel = updated?.displayRole
-              ? `${stripStatus(updated.displayRole)} (done)`
-              : "Tool (done)";
-            lastToolSnapshotRef.current = { content: doneContent, displayRole: doneLabel };
-            optionsRef.current.onToolMessage?.({
-              content: doneContent,
-              displayRole: doneLabel,
-              final: true,
-              messageId: targetId,
-            });
-          }
-          toolPendingRef.current = false;
-          lastToolMessageId.current = null;
-          lastToolSnapshotRef.current = null;
-        }
-        break;
-
-      case "info":
-        // Info messages (e.g., tool execution results)
-        setStatusMessage(msg.message || "");
-        optionsRef.current.onInfo?.({ message: msg.message, raw: msg });
-        break;
-    }
-  };
-
-  // Auto-connect on mount
   useEffect(() => {
-    // Connect is handled manually for now to avoid auto-connecting
-    // connect();
     return () => {
-      disconnect();
+      disconnectRef.current();
     };
-  }, [disconnect]);
+  }, []); // Empty deps - only run on mount/unmount
+
+  // Convert Message to legacy ChatMessage format for compatibility
+  const legacyMessages = messages.map((msg, idx) => ({
+    id: idx + 1,
+    role: msg.role,
+    content: msg.content,
+    timestamp: msg.timestamp,
+    displayRole: msg.displayRole,
+    metadata: msg.metadata,
+  }));
 
   return {
-    messages,
+    messages: legacyMessages,
     status,
     statusMessage,
     statusContext,
@@ -825,8 +568,10 @@ export function useAIChatBackend(options: UseAIChatBackendOptions) {
     connect,
     disconnect,
     sendMessage,
-    sendBackgroundMessage,
+    sendBackgroundMessage: sendMessage, // Simplified - same as sendMessage
     interrupt,
+    retry,
     isConnected,
+    canRetry: reconnectAttemptsRef.current >= maxReconnectAttempts,
   };
 }

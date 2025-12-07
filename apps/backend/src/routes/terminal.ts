@@ -6,6 +6,7 @@ import {
   sendInput,
   markSessionConnected,
   getOutputSince,
+  resizeTerminalSession,
 } from "../services/terminalManager";
 import { processLogger } from "../services/processLogger";
 import { requireSession, validateToken } from "../utils/auth";
@@ -535,5 +536,40 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       },
     });
     reply.send({ accepted: true });
+  });
+
+  fastify.post("/terminal/sessions/:sessionId/resize", async (request, reply) => {
+    const session = await requireSession(request, reply);
+    if (!session) return;
+
+    const params = request.params as { sessionId: string };
+    const body = request.body as { cols?: number; rows?: number };
+
+    const cols = Number(body?.cols);
+    const rows = Number(body?.rows);
+
+    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) {
+      reply
+        .code(400)
+        .send({ error: { code: "invalid_size", message: "cols and rows must be positive numbers" } });
+      return;
+    }
+
+    const ok = resizeTerminalSession(params.sessionId, cols, rows);
+    if (!ok) {
+      reply.code(404).send({ error: { code: "not_found", message: "Session not found" } });
+      return;
+    }
+
+    await recordAuditEvent(fastify, {
+      userId: session.userId,
+      eventType: "terminal:resize",
+      projectId: getTerminalSession(params.sessionId)?.projectId ?? null,
+      sessionId: params.sessionId,
+      ipAddress: request.ip,
+      metadata: { cols, rows },
+    });
+
+    reply.send({ ok: true, cols, rows });
   });
 };

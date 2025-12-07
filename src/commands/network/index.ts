@@ -10,6 +10,10 @@ import { NetworkConnectionViewHandler } from './connection/view';
 
 import { NetworkTopologyViewHandler } from './topology/view';
 
+import { NetworkElementListHandler } from './element/list';
+import { NetworkElementViewHandler } from './element/view';
+import { NetworkStatusHandler } from './status';
+
 export const networkCommands = {
   server: {
     list: new NetworkServerListHandler(),
@@ -22,5 +26,11 @@ export const networkCommands = {
   },
   topology: {
     view: new NetworkTopologyViewHandler(),
+  },
+  element: {
+    list: new NetworkElementListHandler(),
+    view: new NetworkElementViewHandler(),
   }
 };
+
+export { NetworkStatusHandler };

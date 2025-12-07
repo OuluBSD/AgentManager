@@ -2,41 +2,32 @@
 
 // Nexus CLI Entry Point
 // This is the main entry point for the Nexus CLI
-// It parses command line arguments, runs them through the parser, 
-// sends them to the runtime, and returns output as JSON
+// It uses tsx to run TypeScript directly
 
-const { parseCommandLine } = require('./src/parser');
-const { executeCommand } = require('./src/runtime');
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
-async function main() {
-  try {
-    // Get command line arguments (skip 'node' and script path)
-    const input = process.argv.slice(2).join(' ');
-    
-    // Parse the command
-    const parsedCommand = parseCommandLine(input);
-    
-    // Execute the command through the runtime
-    const result = await executeCommand(parsedCommand);
-    
-    // Output the result as JSON
-    console.log(JSON.stringify(result, null, 2));
-  } catch (error) {
-    // Handle errors and output as JSON error
-    const errorResult = {
-      status: 'error',
-      data: null,
-      message: error.message,
-      errors: [{
-        type: 'CLI_ERROR',
-        message: error.message,
-        timestamp: new Date().toISOString()
-      }]
-    };
-    console.error(JSON.stringify(errorResult, null, 2));
-    process.exit(1);
-  }
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-// Run the main function
-main();
+// Use tsx to run the main TypeScript file directly with --import
+const nodeArgs = [
+  '--import', 'tsx',
+  join(__dirname, '..', 'src', 'main.ts'),
+  ...process.argv.slice(2)
+];
+
+const child = spawn('node', nodeArgs, {
+  stdio: 'inherit',
+  cwd: process.cwd()
+});
+
+child.on('error', (err) => {
+  console.error('Failed to start Nexus CLI:', err.message);
+  process.exit(1);
+});
+
+child.on('close', (code) => {
+  process.exit(code || 0);
+});

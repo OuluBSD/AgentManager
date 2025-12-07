@@ -33,6 +33,7 @@ import {
   updateProject,
   deleteProject,
   updateRoadmap,
+  buildTerminalWsCandidates,
 } from "../../lib/api";
 import { TemplatePanel } from "../../components/TemplatePanel";
 import { useMessageNavigation } from "../../components/MessageNavigation";
@@ -82,6 +83,7 @@ const DEFAULT_CODE_SETTINGS = {
   showHidden: false,
   wrapLines: false,
   rememberLastPath: true,
+  enhancedEditor: true,
 };
 
 type ProjectItem = {
@@ -930,6 +932,15 @@ export default function Page() {
   const [chatTabState, setChatTabState] = useState<Record<string, MainTab>>({});
   const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
   const [terminalWsCandidates, setTerminalWsCandidates] = useState<string[]>([]);
+
+  // Stable callbacks for Terminal component to prevent infinite loops
+  const handleTerminalSessionCreated = useCallback((sid: string) => {
+    setTerminalSessionId(sid);
+  }, []);
+
+  const handleTerminalSessionClosed = useCallback(() => {
+    setTerminalSessionId(null);
+  }, []);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [sidebarHover, setSidebarHover] = useState(false);
   const [windowWidth, setWindowWidth] = useState(
@@ -4525,6 +4536,7 @@ export default function Page() {
                     wrapLines={codeSettings.wrapLines}
                     onChange={(newContent) => updateActiveDraft(newContent)}
                     fullHeight
+                    useEnhancedEditor={codeSettings.enhancedEditor}
                   />
                 </div>
                 <div className="code-diff-bar">
@@ -4591,6 +4603,21 @@ export default function Page() {
               <label className="settings-toggle">
                 <input
                   type="checkbox"
+                  checked={codeSettings.enhancedEditor}
+                  onChange={(e) =>
+                    setCodeSettings((prev) => ({ ...prev, enhancedEditor: e.target.checked }))
+                  }
+                />
+                <div>
+                  <div className="settings-toggle-title">Use enhanced editor</div>
+                  <div className="settings-toggle-detail">
+                    Monaco-based syntax highlighting for C, Python, and more (disable if slow).
+                  </div>
+                </div>
+              </label>
+              <label className="settings-toggle">
+                <input
+                  type="checkbox"
                   checked={codeSettings.showHidden}
                   onChange={(e) =>
                     setCodeSettings((prev) => ({ ...prev, showHidden: e.target.checked }))
@@ -4647,8 +4674,8 @@ export default function Page() {
           <Terminal
             sessionToken={sessionToken}
             projectId={selectedProjectId}
-            onSessionCreated={(sid) => setTerminalSessionId(sid)}
-            onSessionClosed={() => setTerminalSessionId(null)}
+            onSessionCreated={handleTerminalSessionCreated}
+            onSessionClosed={handleTerminalSessionClosed}
             autoConnect={autoOpenTerminal}
           />
         ) : (
@@ -5621,8 +5648,8 @@ export default function Page() {
                       <Terminal
                         sessionToken={sessionToken}
                         projectId={selectedProjectId}
-                        onSessionCreated={(sid) => setTerminalSessionId(sid)}
-                        onSessionClosed={() => setTerminalSessionId(null)}
+                        onSessionCreated={handleTerminalSessionCreated}
+                        onSessionClosed={handleTerminalSessionClosed}
                         autoConnect={autoOpenTerminal}
                       />
                     )

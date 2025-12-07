@@ -8,6 +8,21 @@ export interface SessionConfig {
   capabilities?: any;
 }
 
+export interface Message {
+  messageId: string;
+  role: string; // 'user' | 'assistant' | 'system'
+  content: string;
+  timestamp: number;
+}
+
+export interface AISession {
+  sessionId: string;
+  type: 'ai-chat';
+  createdAt: number;
+  context?: any;
+  messages: Message[];
+}
+
 export interface Session {
   sessionId: string;
   type: string;

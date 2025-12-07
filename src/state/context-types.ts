@@ -8,6 +8,8 @@ export interface ContextState {
   activeRoadmapTitle?: string;
   activeChatId?: string;
   activeChatTitle?: string;
+  selectedAiSessionId?: string;
+  selectedNetworkElementId?: string;
   lastUpdate: string;
 }
 

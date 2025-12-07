@@ -2,11 +2,20 @@
 // Formatting utilities
 
 export function formatOutput(data: any): string {
-  // Placeholder implementation
-  throw new Error('formatOutput not implemented');
+  // Format the data as JSON string
+  return JSON.stringify(data, null, 2);
 }
 
 export function formatError(error: any): string {
-  // Placeholder implementation
-  throw new Error('formatError not implemented');
+  // Format the error as JSON string
+  return JSON.stringify({
+    status: 'error',
+    data: null,
+    message: error?.message || 'An unknown error occurred',
+    errors: [{
+      type: 'GENERAL_ERROR',
+      message: error?.message || 'An unknown error occurred',
+      timestamp: new Date().toISOString()
+    }]
+  }, null, 2);
 }

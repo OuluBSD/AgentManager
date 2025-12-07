@@ -4,8 +4,9 @@
 import { AISessionListHandler } from './session/list';
 import { AISessionCreateHandler } from './session/create';
 import { AISessionDeleteHandler } from './session/delete';
-import { AISessionSwitchHandler } from './session/switch';
+import { AISessionSelectHandler } from './session/switch'; // Note: switched to select
 import { AISessionViewHandler } from './session/view';
+import { AISessionCurrentHandler } from './session/current';
 
 import { AIMessageSendHandler } from './message/send';
 import { AIMessageListHandler } from './message/list';
@@ -21,8 +22,9 @@ export const aiCommands = {
     list: new AISessionListHandler(),
     create: new AISessionCreateHandler(),
     delete: new AISessionDeleteHandler(),
-    switch: new AISessionSwitchHandler(),
+    select: new AISessionSelectHandler(),
     view: new AISessionViewHandler(),
+    current: new AISessionCurrentHandler(),
   },
   message: {
     send: new AIMessageSendHandler(),
