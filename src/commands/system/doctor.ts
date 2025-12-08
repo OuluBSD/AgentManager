@@ -15,23 +15,30 @@ interface DoctorCheck {
   fixHint?: string;
 }
 
+interface DoctorResult {
+  status: 'ok' | 'warning' | 'error';
+  checks: DoctorCheck[];
+  timestamp: string;
+  changes?: any;
+}
+
 export class SystemDoctorHandler implements CommandHandler {
   async execute(_ctx: ExecutionContext): Promise<CommandResult> {
     try {
       const checks: DoctorCheck[] = [];
-      
+
       // Check config integrity
       checks.push(await checkConfig());
-      
+
       // Check API connectivity
       checks.push(await checkAPIConnectivity());
-      
+
       // Check auth token usability
       checks.push(await checkAuthToken());
-      
+
       // Check file permissions for config directory
       checks.push(await checkConfigFilePermissions());
-      
+
       // Check parity
       checks.push(await checkParity());
 
@@ -44,12 +51,19 @@ export class SystemDoctorHandler implements CommandHandler {
         : checks.some(check => check.status === 'warning')
           ? 'warning'
           : 'ok';
-      
-      const result = {
+
+      // Load previous results to compute changes
+      const previousResults = await this.loadPreviousResults();
+      const result: DoctorResult = {
         status: overallStatus,
-        checks
+        checks,
+        timestamp: new Date().toISOString(),
+        changes: this.computeChanges(previousResults, checks)
       };
-      
+
+      // Save current results for next comparison
+      await this.saveCurrentResults(result);
+
       return {
         status: 'ok' as const,
         data: result,
@@ -67,6 +81,89 @@ export class SystemDoctorHandler implements CommandHandler {
         }]
       };
     }
+  }
+
+  private async loadPreviousResults(): Promise<DoctorResult | null> {
+    try {
+      const configPath = getConfigFilePath();
+      const resultsPath = path.join(path.dirname(configPath), 'doctor-results.json');
+      const content = await fs.readFile(resultsPath, 'utf-8');
+      return JSON.parse(content) as DoctorResult;
+    } catch (error) {
+      // If file doesn't exist or is invalid, return null
+      return null;
+    }
+  }
+
+  private async saveCurrentResults(results: DoctorResult): Promise<void> {
+    try {
+      const configPath = getConfigFilePath();
+      const resultsPath = path.join(path.dirname(configPath), 'doctor-results.json');
+      await fs.writeFile(resultsPath, JSON.stringify(results, null, 2));
+    } catch (error) {
+      // If saving fails, just log the error but don't fail the doctor command
+      console.error('Failed to save doctor results for comparison:', error);
+    }
+  }
+
+  private computeChanges(prev: DoctorResult | null, current: DoctorCheck[]): any {
+    if (!prev) {
+      // If no previous results, all checks are "unchanged" but we'll return a simple flag
+      const comparisons = current.map(check => ({
+        name: check.name,
+        previousStatus: null,
+        currentStatus: check.status,
+        statusChange: 'no-previous-data' as const
+      }));
+
+      // For the first run, we consider there are no changes since there's no baseline to compare with
+      const hasChanges = false;
+
+      return {
+        hasChanges,
+        comparisons
+      };
+    }
+
+    const comparisons = current.map(currentCheck => {
+      const prevCheck = prev.checks.find(pc => pc.name === currentCheck.name);
+
+      if (!prevCheck) {
+        return {
+          name: currentCheck.name,
+          previousStatus: null,
+          currentStatus: currentCheck.status,
+          statusChange: 'new' as const
+        };
+      }
+
+      const statusChangeKey = `${prevCheck.status}-to-${currentCheck.status}` as
+        | 'ok-to-warning' | 'ok-to-error' | 'ok-to-ok'
+        | 'warning-to-error' | 'warning-to-ok' | 'warning-to-warning'
+        | 'error-to-error' | 'error-to-ok' | 'error-to-warning';
+
+      const statusChange = prevCheck.status !== currentCheck.status
+        ? statusChangeKey
+        : 'unchanged' as const;
+
+      return {
+        name: currentCheck.name,
+        previousStatus: prevCheck.status,
+        currentStatus: currentCheck.status,
+        statusChange
+      };
+    });
+
+    const hasChanges = comparisons.some(c => {
+      // A change occurred if status is not 'unchanged' (when comparing with previous)
+      // For no-previous-data case, we don't consider it as a change since it was handled separately
+      return c.statusChange !== 'unchanged' && c.statusChange !== 'new';
+    });
+
+    return {
+      hasChanges,
+      comparisons
+    };
   }
 };
 

@@ -1,0 +1,25 @@
+{
+  "name": "guess-the-number-game",
+  "version": "1.0.0",
+  "description": "A simple console game where players guess a randomly generated number",
+  "main": "guess-the-number-game.ts",
+  "scripts": {
+    "start": "tsx guess-the-number-game.ts",
+    "dev": "tsx watch guess-the-number-game.ts",
+    "test": "tsx test/guess-the-number.test.ts"
+  },
+  "keywords": [
+    "game",
+    "console",
+    "guessing",
+    "number"
+  ],
+  "author": "Nexus AI Assistant",
+  "license": "MIT",
+  "dependencies": {
+    "tsx": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0"
+  }
+}

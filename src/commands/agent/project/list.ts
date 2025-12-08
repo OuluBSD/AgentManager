@@ -41,7 +41,12 @@ export class ProjectListHandler implements CommandHandler {
         count: projects.length
       };
     } catch (error) {
-      throw new Error(`Failed to list projects: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = `Failed to list projects: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      const err = new Error(errorMessage);
+      if (error instanceof Error) {
+        err.stack = error.stack; // Preserve original stack trace
+      }
+      throw err;
     }
   }
 }

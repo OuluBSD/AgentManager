@@ -38,7 +38,8 @@ export class RuntimeEngine {
         message: attachHintToError('HANDLER_NOT_FOUND', errorMessage),
         errors: [{
           type: 'HANDLER_NOT_FOUND',
-          message: attachHintToError('HANDLER_NOT_FOUND', `Command handler not implemented: ${validated.commandId}`)
+          message: attachHintToError('HANDLER_NOT_FOUND', `Command handler not implemented: ${validated.commandId}`),
+          timestamp: new Date().toISOString()
         } as CommandError]
       };
     }
@@ -83,7 +84,8 @@ export class RuntimeEngine {
             errors: [{
               type: errorType,
               message: attachHintToError(errorType, `Command ${validated.commandId} requires ${requiredContext} context`),
-              details: { requiredContext, commandId: validated.commandId }
+              details: { requiredContext, commandId: validated.commandId },
+              timestamp: new Date().toISOString()
             } as CommandError]
           };
         }
@@ -149,7 +151,7 @@ export class RuntimeEngine {
             streamKind = 'poll-events';
           }
 
-          const generator = wrapAsyncGenerator(source, executionResult, undefined, sourceId, streamKind);
+          const generator = wrapAsyncGenerator(source, executionResult, undefined, sourceId, streamKind, validated.commandId);
           for await (const event of generator) {
             // Check if we've received an interruption signal
             if (interrupted) {
@@ -202,7 +204,9 @@ export class RuntimeEngine {
         message: attachHintToError('EXECUTION_ERROR', errorMessage),
         errors: [{
           type: 'EXECUTION_ERROR',
-          message: attachHintToError('EXECUTION_ERROR', error.message)
+          message: attachHintToError('EXECUTION_ERROR', error.message),
+          timestamp: new Date().toISOString(),
+          stack: error.stack
         } as CommandError]
       };
     }

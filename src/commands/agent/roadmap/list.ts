@@ -29,17 +29,17 @@ export class RoadmapListHandler implements CommandHandler {
       // Call API to get roadmaps for the project
       const response = await API_CLIENT.getRoadmaps(projectId);
 
-      // Get current context to determine selected roadmap
-      const contextManager = new ContextManager();
-      const currentContext = await contextManager.load();
-      const selectedRoadmapId = currentContext.activeRoadmapId;
-
       if (response.status === 'error') {
         throw new Error(`Failed to retrieve roadmaps: ${response.message}`);
       } else if (response.status === 'auth_error') {
         // Handle authentication error specifically
         throw new Error(`Authentication error: ${response.message}`);
       }
+
+      // Get current context to determine selected roadmap
+      const contextManager = new ContextManager();
+      const currentContext = await contextManager.load();
+      const selectedRoadmapId = currentContext.activeRoadmapId;
 
       // Filter roadmaps if filter flag is provided
       let roadmaps = response.data.roadmaps;

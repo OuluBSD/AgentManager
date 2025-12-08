@@ -36,9 +36,20 @@ export class ChatListHandler implements CommandHandler {
         throw new Error(`Authentication error: ${response.message}`);
       }
 
+      // Get current context to determine selected chat
+      const contextManager = new ContextManager();
+      const currentContext = await contextManager.load();
+      const selectedChatId = currentContext.activeChatId;
+
+      // Add selected flag to each chat
+      const chats = response.data.chats.map((chat: any) => ({
+        ...chat,
+        selected: chat.id === selectedChatId
+      }));
+
       return {
-        chats: response.data.chats,
-        count: response.data.chats.length
+        chats,
+        count: chats.length
       };
     } catch (error) {
       throw new Error(`Failed to list chats: ${(error as Error).message}`);

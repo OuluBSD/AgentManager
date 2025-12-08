@@ -48,9 +48,9 @@ function loadConfigSync(): any {
       const configContent = fs.readFileSync(configPath, 'utf-8');
       try {
         return JSON.parse(configContent);
-      } catch (parseError) {
+      } catch (parseError: unknown) {
         // Log the parsing error for debugging
-        console.error(`Config file corrupted: ${parseError.message}`);
+        console.error(`Config file corrupted: ${(parseError as Error).message}`);
         console.error(`Config path: ${configPath}`);
 
         // Try to backup the corrupted config
@@ -58,8 +58,8 @@ function loadConfigSync(): any {
           const backupPath = configPath + '.backup';
           fs.copyFileSync(configPath, backupPath);
           console.error(`Corrupted config backed up to: ${backupPath}`);
-        } catch (backupError) {
-          console.error(`Failed to backup corrupted config: ${backupError.message}`);
+        } catch (backupError: unknown) {
+          console.error(`Failed to backup corrupted config: ${(backupError as Error).message}`);
         }
 
         // Return default config
@@ -112,8 +112,20 @@ function formatErrorPretty(error: any): string {
     const firstError = error.errors[0];
     const errorType = firstError?.type || 'GENERAL_ERROR';
     const errorMessage = firstError?.message || message;
+    const timestamp = firstError?.timestamp ? chalk.gray(`[${firstError.timestamp}]`) : '';
+    const stackTrace = firstError?.stack ? `\n${chalk.red('Stack:')} ${firstError.stack.split('\n')[0]}` : '';
 
-    return `${chalk.red('✗ Error')}: ${chalk.red(errorMessage)}\n${chalk.yellow(`Type: ${errorType}`)}`;
+    let result = `${chalk.red('✗ Error')}: ${chalk.red(errorMessage)}\n${chalk.yellow(`Type: ${errorType}`)}`;
+
+    if (timestamp) {
+      result += ` ${timestamp}`;
+    }
+
+    if (stackTrace) {
+      result += stackTrace;
+    }
+
+    return result;
   }
 
   return `${chalk.red('✗ Error')}: ${chalk.red(message)}`;

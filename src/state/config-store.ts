@@ -89,8 +89,8 @@ export async function loadConfig(): Promise<Config> {
         const backupPath = configPath + '.backup';
         await fs.copyFile(configPath, backupPath);
         console.error(`Corrupted config backed up to: ${backupPath}`);
-      } catch (backupError) {
-        console.error(`Failed to backup corrupted config: ${backupError.message}`);
+      } catch (backupError: unknown) {
+        console.error(`Failed to backup corrupted config: ${(backupError as Error).message}`);
       }
       return defaultConfig;
     } else {

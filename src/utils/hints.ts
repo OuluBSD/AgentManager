@@ -42,6 +42,14 @@ export const hints: Hint[] = [
   {
     errorType: 'AUTH_ERROR',
     message: "Authentication required or token invalid. Run 'nexus auth login' to authenticate or check your credentials."
+  },
+  {
+    errorType: 'AUTH_EXPIRED_ERROR',
+    message: "Authentication token has expired. Please run 'nexus auth login' to obtain a new token."
+  },
+  {
+    errorType: 'AUTH_INVALID_CREDENTIALS_ERROR',
+    message: "Invalid credentials provided. Please run 'nexus auth login' with correct credentials."
   }
 ];
 

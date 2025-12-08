@@ -1,0 +1,23 @@
+{
+  "name": "tiny-gui-demo",
+  "version": "1.0.0",
+  "description": "A minimal GUI demo application",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "keywords": [
+    "gui",
+    "demo",
+    "electron"
+  ],
+  "author": "Nexus AI Assistant",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.3.3"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1"
+  }
+}

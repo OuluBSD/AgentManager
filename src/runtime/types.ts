@@ -45,4 +45,6 @@ export interface CommandError {
   type: string;
   message: string;
   details?: any;
+  timestamp?: string;
+  stack?: string;
 }

@@ -36,7 +36,8 @@ export async function* wrapAsyncGenerator<T>(
   generator: AsyncGenerator<T>,
   event?: string,
   sourceId?: string,
-  streamKind?: string
+  streamKind?: string,
+  commandId?: string
 ): AsyncGenerator<ObservabilityEvent> {
   const getSequenceNumber = createSeqCounter();
   const correlationId = uuidv4(); // Generate a single correlation ID for the entire stream
@@ -51,12 +52,20 @@ export async function* wrapAsyncGenerator<T>(
     correlationId,
     sourceId,
     metadata: {
-      streamKind: streamKind || `${source}-stream`
+      streamKind: streamKind || `${source}-stream`,
+      commandId
     }
   };
 
+  let lastEvent: any = null;
   try {
     for await (const rawEvent of generator) {
+      // Check if this is a final token event from AI
+      const isFinalToken = source === 'ai' &&
+                           typeof rawEvent === 'object' &&
+                           rawEvent &&
+                           (rawEvent as any).isFinal === true;
+
       yield {
         seq: getSequenceNumber(),
         timestamp: new Date().toISOString(),
@@ -67,9 +76,13 @@ export async function* wrapAsyncGenerator<T>(
         sourceId,
         metadata: {
           streamKind: streamKind || `${source}-stream`,
+          isFinal: isFinalToken, // Add isFinal flag to metadata for AI streams
+          commandId,
           ...(typeof rawEvent === 'object' && rawEvent && (rawEvent as any).metadata ? (rawEvent as any).metadata : {})
         }
       };
+
+      lastEvent = rawEvent;
     }
   } catch (error) {
     // If interrupted, emit an interrupt event
@@ -83,7 +96,8 @@ export async function* wrapAsyncGenerator<T>(
         correlationId,
         sourceId,
         metadata: {
-          streamKind: streamKind || `${source}-stream`
+          streamKind: streamKind || `${source}-stream`,
+          commandId
         }
       };
     } else {
@@ -101,7 +115,9 @@ export async function* wrapAsyncGenerator<T>(
     correlationId,
     sourceId,
     metadata: {
-      streamKind: streamKind || `${source}-stream`
+      streamKind: streamKind || `${source}-stream`,
+      commandId,
+      isFinal: source === 'ai' && lastEvent && (lastEvent as any).isFinal === true // Mark if the last event was final
     }
   };
 }

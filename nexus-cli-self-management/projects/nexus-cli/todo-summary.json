@@ -1,0 +1,55 @@
+{
+  "project": "Nexus CLI",
+  "roadmap": "AI usability polish",
+  "chat": "AI self-feedback loop",
+  "todoItems": [
+    {
+      "id": "nexus-cli-todo-001",
+      "title": "Fix Module Resolution System",
+      "description": "The CLI has ES module resolution issues that prevent execution due to directory import problems",
+      "classification": "schema issue",
+      "details": "The error 'Directory import '/home/sblo/Dev/AgentManager/dist/parser' is not supported resolving ES modules' prevents basic CLI functionality",
+      "impact": "Completely blocks CLI usage",
+      "priority": "high",
+      "status": "open",
+      "discoveredBy": "AI Agent during usage",
+      "discoveryDate": "2025-12-08"
+    },
+    {
+      "id": "nexus-cli-todo-002",
+      "title": "Enhance Process Correlation with Semantic Context",
+      "description": "Debug and network outputs need clearer project context metadata to help AI agents correlate processes with development activities",
+      "classification": "DX",
+      "details": "Current debug outputs don't clearly link processes to project, roadmap, or chat contexts",
+      "impact": "Makes it difficult for AI agents to understand which processes belong to which projects",
+      "priority": "medium",
+      "status": "open",
+      "discoveredBy": "AI Agent during usage",
+      "discoveryDate": "2025-12-08"
+    },
+    {
+      "id": "nexus-cli-todo-003",
+      "title": "Improve Error Message Contextualization",
+      "description": "Error messages need more contextual information to help AI agents understand and resolve issues",
+      "classification": "error handling",
+      "details": "Errors like module resolution failures should suggest specific remediation steps",
+      "impact": "Reduces AI agent efficiency when troubleshooting",
+      "priority": "medium",
+      "status": "open",
+      "discoveredBy": "AI Agent during usage",
+      "discoveryDate": "2025-12-08"
+    }
+  ],
+  "summary": {
+    "totalItems": 3,
+    "byClassification": {
+      "schema issue": 1,
+      "DX": 1,
+      "error handling": 1
+    },
+    "byPriority": {
+      "high": 1,
+      "medium": 2
+    }
+  }
+}

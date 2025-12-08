@@ -119,6 +119,7 @@ export interface GetRoadmapResponse {
 // Chat types
 export interface ChatSummary {
   id: string;
+  selected?: boolean;  // Indicates if this chat is currently selected
   title: string;
   status: string;
   progress: number;
@@ -168,6 +169,7 @@ export interface AiTokenEvent {
   content?: string;
   messageId?: string;
   chunkIndex?: number;  // Index of this token chunk in the sequence
+  isFinal?: boolean;    // Indicates if this is the final token in the sequence
   error?: string;
 }
 

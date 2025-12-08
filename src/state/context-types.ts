@@ -4,6 +4,8 @@
 export interface ContextState {
   activeProjectId?: string;
   activeProjectName?: string;
+  activeProjectCategory?: string;
+  activeProjectStatus?: string;
   activeRoadmapId?: string;
   activeRoadmapTitle?: string;
   activeChatId?: string;

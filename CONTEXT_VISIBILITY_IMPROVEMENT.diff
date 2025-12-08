@@ -1,0 +1,45 @@
+diff --git a/src/commands/agent/chat/list.ts b/src/commands/agent/chat/list.ts
+index 1234567..89abcdef 100644
+--- a/src/commands/agent/chat/list.ts
++++ b/src/commands/agent/chat/list.ts
+@@ -15,6 +15,18 @@ export class ChatListHandler implements CommandHandler {
+         roadmapId = currentContext.activeRoadmapId;
+       }
+ 
++      // Get current context to determine selected chat
++      const contextManager = new ContextManager();
++      const currentContext = await contextManager.load();
++      const selectedChatId = currentContext.activeChatId;
++
+       // Call API to get chats for the roadmap
+       const response = await API_CLIENT.getChats(roadmapId);
+ 
+@@ -25,11 +37,16 @@ export class ChatListHandler implements CommandHandler {
+         throw new Error(`Authentication error: ${response.message}`);
+       }
+ 
+-      return {
+-        chats: response.data.chats,
+-        count: response.data.chats.length
+-      };
++      // Add selected flag to each chat
++      const chats = response.data.chats.map((chat: any) => ({
++        ...chat,
++        selected: chat.id === selectedChatId
++      }));
++
++      return { chats, count: chats.length };
+     } catch (error) {
+       throw new Error(`Failed to list chats: ${(error as Error).message}`);
+     }
+diff --git a/src/api/types.ts b/src/api/types.ts
+index abcdef1..2345678 100644
+--- a/src/api/types.ts
++++ b/src/api/types.ts
+@@ -120,6 +120,7 @@ export interface ChatSummary {
+   id: string;
++  selected?: boolean;  // Indicates if this chat is currently selected
+   title: string;
+   status: string;
+   progress: number;
+   note: string;

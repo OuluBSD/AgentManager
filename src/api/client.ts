@@ -508,6 +508,7 @@ export class APIClient {
   async getProjects(): Promise<ListProjectsResponse> {
     const response = await this.makeRequest('/projects', { method: 'GET', headers: {} });
     const isAuthError = response.status === 401 || response.status === 403;
+    const authErrorType = this.determineAuthErrorType(response);
 
     return {
       status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
@@ -520,7 +521,7 @@ export class APIClient {
       errors: response.status === 200
         ? []
         : [{
-          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          type: isAuthError ? authErrorType : 'GENERAL_ERROR',
           message: response.data.message,
           code: response.status
         }]
@@ -530,6 +531,7 @@ export class APIClient {
   async getProjectById(id: string): Promise<GetProjectResponse> {
     const response = await this.makeRequest(`/projects/${id}`, { method: 'GET', headers: {} });
     const isAuthError = response.status === 401 || response.status === 403;
+    const authErrorType = this.determineAuthErrorType(response);
 
     return {
       status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
@@ -542,7 +544,7 @@ export class APIClient {
       errors: response.status === 200
         ? []
         : [{
-          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          type: isAuthError ? authErrorType : 'GENERAL_ERROR',
           message: response.data.message,
           code: response.status
         }]
@@ -553,6 +555,7 @@ export class APIClient {
   async getRoadmaps(projectId: string): Promise<ListRoadmapsResponse> {
     const response = await this.makeRequest(`/projects/${projectId}/roadmaps`, { method: 'GET', headers: {} });
     const isAuthError = response.status === 401 || response.status === 403;
+    const authErrorType = this.determineAuthErrorType(response);
 
     return {
       status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
@@ -565,7 +568,7 @@ export class APIClient {
       errors: response.status === 200
         ? []
         : [{
-          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          type: isAuthError ? authErrorType : 'GENERAL_ERROR',
           message: response.data.message,
           code: response.status
         }]
@@ -575,6 +578,7 @@ export class APIClient {
   async getRoadmapById(roadmapId: string): Promise<GetRoadmapResponse> {
     const response = await this.makeRequest(`/roadmaps/${roadmapId}`, { method: 'GET', headers: {} });
     const isAuthError = response.status === 401 || response.status === 403;
+    const authErrorType = this.determineAuthErrorType(response);
 
     return {
       status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
@@ -587,7 +591,7 @@ export class APIClient {
       errors: response.status === 200
         ? []
         : [{
-          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          type: isAuthError ? authErrorType : 'GENERAL_ERROR',
           message: response.data.message,
           code: response.status
         }]
@@ -598,6 +602,7 @@ export class APIClient {
   async getChats(roadmapId: string): Promise<ListChatsResponse> {
     const response = await this.makeRequest(`/roadmaps/${roadmapId}/chats`, { method: 'GET', headers: {} });
     const isAuthError = response.status === 401 || response.status === 403;
+    const authErrorType = this.determineAuthErrorType(response);
 
     return {
       status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
@@ -610,7 +615,7 @@ export class APIClient {
       errors: response.status === 200
         ? []
         : [{
-          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          type: isAuthError ? authErrorType : 'GENERAL_ERROR',
           message: response.data.message,
           code: response.status
         }]
@@ -620,6 +625,7 @@ export class APIClient {
   async getChatById(chatId: string): Promise<GetChatResponse> {
     const response = await this.makeRequest(`/chats/${chatId}`, { method: 'GET', headers: {} });
     const isAuthError = response.status === 401 || response.status === 403;
+    const authErrorType = this.determineAuthErrorType(response);
 
     return {
       status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
@@ -632,7 +638,7 @@ export class APIClient {
       errors: response.status === 200
         ? []
         : [{
-          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          type: isAuthError ? authErrorType : 'GENERAL_ERROR',
           message: response.data.message,
           code: response.status
         }]
@@ -674,7 +680,8 @@ export class APIClient {
       event: 'done',
       content: '',
       messageId: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      chunkIndex: chunkIndex  // Final chunk index
+      chunkIndex: chunkIndex,  // Final chunk index
+      isFinal: true            // Explicitly mark this as the final token
     };
   }
 
@@ -692,8 +699,32 @@ export class APIClient {
       this.token = token;
       return { token, user };
     } else {
+      // Check if this is an authentication error (invalid credentials)
+      if (response.status === 401) {
+        throw new Error('Invalid credentials provided');
+      }
       throw new Error(response.data.error || 'Login failed');
     }
+  }
+
+  // Helper method to determine the specific type of auth error
+  private determineAuthErrorType(response: APIResponse): string {
+    if (response.status === 401) {
+      // Check response body or headers for specific indicators of token expiration
+      // In a real implementation, the backend might return specific headers or message
+      // Here we'll assume that 401 typically means the token is expired or invalid
+      // For now, we'll return auth_expired as the most common case
+      if (response.data && typeof response.data === 'object' &&
+          (response.data.message?.toLowerCase().includes('expired') ||
+           response.data.error?.toLowerCase().includes('expired'))) {
+        return 'AUTH_EXPIRED_ERROR';
+      }
+      return 'AUTH_EXPIRED_ERROR'; // Default to expired for 401
+    } else if (response.status === 403) {
+      // 403 usually means valid token but unauthorized access
+      return 'AUTH_INVALID_CREDENTIALS_ERROR';
+    }
+    return 'AUTH_ERROR'; // Default auth error type
   }
 
   // Network element methods
@@ -834,6 +865,7 @@ export class APIClient {
   async getProcesses(): Promise<ListProcessesResponse> {
     const response = await this.makeRequest('/debug/processes', { method: 'GET', headers: {} });
     const isAuthError = response.status === 401 || response.status === 403;
+    const authErrorType = this.determineAuthErrorType(response);
 
     return {
       status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
@@ -846,7 +878,7 @@ export class APIClient {
       errors: response.status === 200
         ? []
         : [{
-          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          type: isAuthError ? authErrorType : 'GENERAL_ERROR',
           message: response.data.message,
           code: response.status
         }]
@@ -879,6 +911,7 @@ export class APIClient {
   async getWebSockets(): Promise<ListWebSocketsResponse> {
     const response = await this.makeRequest('/debug/websockets', { method: 'GET', headers: {} });
     const isAuthError = response.status === 401 || response.status === 403;
+    const authErrorType = this.determineAuthErrorType(response);
 
     return {
       status: response.status === 200 ? 'ok' : (isAuthError ? 'auth_error' : 'error'),
@@ -891,7 +924,7 @@ export class APIClient {
       errors: response.status === 200
         ? []
         : [{
-          type: isAuthError ? 'AUTH_ERROR' : 'GENERAL_ERROR',
+          type: isAuthError ? authErrorType : 'GENERAL_ERROR',
           message: response.data.message,
           code: response.status
         }]
