@@ -483,5 +483,14 @@ export const CLI_MANIFEST: CLICommandEntry[] = [
     flags: [],
     contextRequired: [],
     streaming: false
+  },
+  {
+    id: 'system.chat-smoke',
+    path: ['system', 'chat-smoke'],
+    description: 'Perform a minimal chat functionality test',
+    args: [],
+    flags: [],
+    contextRequired: [],
+    streaming: false
   }
 ];

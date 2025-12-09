@@ -51,15 +51,26 @@ class GuessTheNumberGame {
     }
 
     rl.question(`Attempt ${this.attempts + 1}/${this.maxAttempts} - Enter your guess: `, (input) => {
-      const guess = parseInt(input.trim());
+      // Enhance input validation with more robust checks
+      const trimmedInput = input.trim();
 
-      // Validate the input
-      if (isNaN(guess)) {
-        console.log('⚠️ Please enter a valid number.\n');
+      // Check for empty input
+      if (trimmedInput === '') {
+        console.log('⚠️ Input cannot be empty. Please enter a valid number.\n');
         this.playRound();
         return;
       }
 
+      // Check if input contains non-numeric characters (except leading/trailing spaces already trimmed)
+      if (!/^-?\d+$/.test(trimmedInput)) {
+        console.log('⚠️ Please enter a valid integer number (no decimals or text).\n');
+        this.playRound();
+        return;
+      }
+
+      const guess = parseInt(trimmedInput);
+
+      // Validate the input is within range
       if (guess < this.minRange || guess > this.maxRange) {
         console.log(`⚠️ Please enter a number between ${this.minRange} and ${this.maxRange}.\n`);
         this.playRound();
