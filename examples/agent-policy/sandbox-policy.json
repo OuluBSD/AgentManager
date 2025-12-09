@@ -1,0 +1,232 @@
+{
+  "version": "1.0.0",
+  "description": "Permissive policy for sandbox environments allowing experimental operations",
+  "defaultCommandBehavior": "review",
+  "defaultWriteBehavior": "review",
+  "commands": [
+    {
+      "pattern": "cat *",
+      "mode": "allow",
+      "description": "Allow viewing files"
+    },
+    {
+      "pattern": "ls *",
+      "mode": "allow",
+      "description": "Allow listing directories"
+    },
+    {
+      "pattern": "grep *",
+      "mode": "allow",
+      "description": "Allow searching within files"
+    },
+    {
+      "pattern": "echo *",
+      "mode": "allow",
+      "description": "Allow simple output operations"
+    },
+    {
+      "pattern": "mkdir *",
+      "mode": "allow",
+      "description": "Allow creating directories"
+    },
+    {
+      "pattern": "rm *",
+      "mode": "deny",
+      "contexts": [
+        {
+          "when": {
+            "projectType": "sandbox"
+          },
+          "overrideMode": "review",
+          "description": "Allow review for rm commands in sandbox projects"
+        },
+        {
+          "when": {
+            "projectType": "sandbox",
+            "directory": "tmp/",
+            "taskType": "cleanup"
+          },
+          "overrideMode": "allow",
+          "description": "Allow rm operations in temp directory during cleanup tasks"
+        }
+      ]
+    },
+    {
+      "pattern": "mv *",
+      "mode": "review",
+      "description": "Allow moving files but with review"
+    },
+    {
+      "pattern": "cp *",
+      "mode": "review",
+      "description": "Allow copying files but with review"
+    },
+    {
+      "pattern": "chmod *",
+      "mode": "deny",
+      "description": "Deny changing file permissions"
+    },
+    {
+      "pattern": "chown *",
+      "mode": "deny",
+      "description": "Deny changing file ownership"
+    },
+    {
+      "pattern": "sudo *",
+      "mode": "deny",
+      "description": "Deny any sudo commands"
+    },
+    {
+      "pattern": "docker *",
+      "mode": "review",
+      "description": "Review all Docker commands"
+    },
+    {
+      "pattern": "kill *",
+      "mode": "deny",
+      "contexts": [
+        {
+          "when": {
+            "projectType": "sandbox",
+            "taskType": "debugging"
+          },
+          "overrideMode": "review",
+          "description": "Allow review of kill commands during debugging in sandbox"
+        }
+      ]
+    },
+    {
+      "pattern": "ps *",
+      "mode": "allow",
+      "description": "Allow process viewing"
+    },
+    {
+      "pattern": "npm *",
+      "mode": "review",
+      "contexts": [
+        {
+          "when": {
+            "projectType": "sandbox"
+          },
+          "overrideMode": "allow",
+          "description": "Allow npm commands in sandbox projects"
+        }
+      ]
+    },
+    {
+      "pattern": "yarn *",
+      "mode": "review",
+      "contexts": [
+        {
+          "when": {
+            "projectType": "sandbox"
+          },
+          "overrideMode": "allow",
+          "description": "Allow yarn commands in sandbox projects"
+        }
+      ]
+    }
+  ],
+  "fileWrites": [
+    {
+      "pattern": "src/**/*",
+      "mode": "allow",
+      "description": "Allow writing to source code directories"
+    },
+    {
+      "pattern": "tests/**/*",
+      "mode": "allow",
+      "description": "Allow writing to test directories"
+    },
+    {
+      "pattern": "docs/**/*",
+      "mode": "allow",
+      "description": "Allow writing to documentation directories"
+    },
+    {
+      "pattern": "tmp/**/*",
+      "mode": "allow",
+      "description": "Allow writing to temporary directories"
+    },
+    {
+      "pattern": "sandbox/**/*",
+      "mode": "allow",
+      "description": "Allow writing to sandbox-specific directories"
+    },
+    {
+      "pattern": "dist/**/*",
+      "mode": "allow",
+      "description": "Allow writing to distribution directories"
+    },
+    {
+      "pattern": "build/**/*",
+      "mode": "allow",
+      "description": "Allow writing to build directories"
+    },
+    {
+      "pattern": "*.tmp",
+      "mode": "allow",
+      "description": "Allow writing temporary files"
+    },
+    {
+      "pattern": "*.temp",
+      "mode": "allow",
+      "description": "Allow writing temporary files"
+    },
+    {
+      "pattern": "*.log",
+      "mode": "allow",
+      "description": "Allow writing log files"
+    },
+    {
+      "pattern": ".env*",
+      "mode": "deny",
+      "description": "Deny writing to environment files"
+    },
+    {
+      "pattern": "/etc/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system directories"
+    },
+    {
+      "pattern": "/home/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to home directories"
+    },
+    {
+      "pattern": "/tmp/**/*",
+      "mode": "review",
+      "description": "Review writes to system temp directory"
+    },
+    {
+      "pattern": "/var/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system variable directories"
+    },
+    {
+      "pattern": "/usr/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system binary directories"
+    },
+    {
+      "pattern": "/opt/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system optional directories"
+    },
+    {
+      "pattern": "/root/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to root directory"
+    }
+  ],
+  "window": {
+    "description": "Sandbox development with permissive but reviewed operations",
+    "lastReviewedAt": "2025-02-20T10:00:00Z",
+    "reviewedBy": "ai:policy-reviewer-v1"
+  },
+  "settings": {
+    "cacheDecisions": true,
+    "decisionCacheTTL": 3600,
+    "maxConsecutiveReviews": 10
+  }
+}

@@ -1,0 +1,215 @@
+{
+  "version": "1.0.0",
+  "description": "Restrictive policy for production-like or sensitive environments requiring review for most operations",
+  "defaultCommandBehavior": "review",
+  "defaultWriteBehavior": "review",
+  "commands": [
+    {
+      "pattern": "cat *",
+      "mode": "review",
+      "description": "Review before viewing files"
+    },
+    {
+      "pattern": "ls *",
+      "mode": "allow",
+      "description": "Allow listing directories without review"
+    },
+    {
+      "pattern": "grep *",
+      "mode": "review",
+      "description": "Review before searching within files"
+    },
+    {
+      "pattern": "echo *",
+      "mode": "allow",
+      "description": "Allow simple output operations"
+    },
+    {
+      "pattern": "mkdir *",
+      "mode": "review",
+      "description": "Review before creating directories"
+    },
+    {
+      "pattern": "rm *",
+      "mode": "deny",
+      "description": "Deny all rm commands by default"
+    },
+    {
+      "pattern": "mv *",
+      "mode": "deny",
+      "description": "Deny moving files by default"
+    },
+    {
+      "pattern": "cp *",
+      "mode": "review",
+      "description": "Review before copying files"
+    },
+    {
+      "pattern": "chmod *",
+      "mode": "deny",
+      "description": "Deny changing file permissions"
+    },
+    {
+      "pattern": "chown *",
+      "mode": "deny",
+      "description": "Deny changing file ownership"
+    },
+    {
+      "pattern": "sudo *",
+      "mode": "deny",
+      "description": "Deny any sudo commands"
+    },
+    {
+      "pattern": "docker *",
+      "mode": "deny",
+      "description": "Deny all Docker commands by default"
+    },
+    {
+      "pattern": "kill *",
+      "mode": "deny",
+      "description": "Deny all kill commands"
+    },
+    {
+      "pattern": "ps *",
+      "mode": "allow",
+      "description": "Allow process viewing"
+    },
+    {
+      "pattern": "git status",
+      "mode": "allow",
+      "description": "Allow git status command"
+    },
+    {
+      "pattern": "git log *",
+      "mode": "allow",
+      "description": "Allow git log command"
+    },
+    {
+      "pattern": "git diff *",
+      "mode": "review",
+      "description": "Review git diff commands"
+    },
+    {
+      "pattern": "git *",
+      "mode": "deny",
+      "description": "Deny all other git commands by default"
+    },
+    {
+      "pattern": "npm install *",
+      "mode": "deny",
+      "description": "Deny npm install commands"
+    },
+    {
+      "pattern": "npm *",
+      "mode": "deny",
+      "description": "Deny all other npm commands by default"
+    },
+    {
+      "pattern": "yarn *",
+      "mode": "deny",
+      "description": "Deny all yarn commands"
+    }
+  ],
+  "fileWrites": [
+    {
+      "pattern": "src/**/*",
+      "mode": "review",
+      "description": "Review before writing to source code directories"
+    },
+    {
+      "pattern": "tests/**/*",
+      "mode": "review",
+      "description": "Review before writing to test directories"
+    },
+    {
+      "pattern": "docs/**/*",
+      "mode": "review",
+      "description": "Review before writing to documentation directories"
+    },
+    {
+      "pattern": "tmp/**/*",
+      "mode": "deny",
+      "description": "Deny writing to temporary directories"
+    },
+    {
+      "pattern": "sandbox/**/*",
+      "mode": "deny",
+      "description": "Deny writing to sandbox-specific directories"
+    },
+    {
+      "pattern": "dist/**/*",
+      "mode": "deny",
+      "description": "Deny writing to distribution directories"
+    },
+    {
+      "pattern": "build/**/*",
+      "mode": "deny",
+      "description": "Deny writing to build directories"
+    },
+    {
+      "pattern": "*.tmp",
+      "mode": "deny",
+      "description": "Deny writing temporary files"
+    },
+    {
+      "pattern": "*.temp",
+      "mode": "deny",
+      "description": "Deny writing temporary files"
+    },
+    {
+      "pattern": "*.log",
+      "mode": "deny",
+      "description": "Deny writing log files"
+    },
+    {
+      "pattern": ".env*",
+      "mode": "deny",
+      "description": "Deny writing to environment files"
+    },
+    {
+      "pattern": "/etc/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system directories"
+    },
+    {
+      "pattern": "/home/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to home directories"
+    },
+    {
+      "pattern": "/tmp/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system temp directory"
+    },
+    {
+      "pattern": "/var/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system variable directories"
+    },
+    {
+      "pattern": "/usr/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system binary directories"
+    },
+    {
+      "pattern": "/opt/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to system optional directories"
+    },
+    {
+      "pattern": "/root/**/*",
+      "mode": "deny",
+      "description": "Never allow writes to root directory"
+    }
+  ],
+  "window": {
+    "description": "Cautious operation with strict review requirements",
+    "lastReviewedAt": "2025-02-20T10:00:00Z",
+    "reviewedBy": "human:admin@example.com"
+  },
+  "settings": {
+    "cacheDecisions": false,
+    "decisionCacheTTL": 0,
+    "maxConsecutiveReviews": 5
+  }
+}
