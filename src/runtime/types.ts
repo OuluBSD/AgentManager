@@ -45,6 +45,12 @@ export interface CommandError {
   type: string;
   message: string;
   details?: any;
-  timestamp?: string;
-  stack?: string;
+  timestamp?: string; // ISO string format with consistent timezone handling (optional for backward compatibility)
+  stack?: string; // Optional stack trace for better debugging with source map support
+  correlationId?: string; // Optional identifier to correlate related errors
+  context?: {
+    projectId?: string; // Optional project context for the error
+    commandId?: string; // Optional command context for the error
+    [key: string]: any; // Additional context properties
+  };
 }

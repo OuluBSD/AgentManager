@@ -14,7 +14,9 @@ export function createSeqCounter(): () => number {
  */
 export function normalizeEvent(
   source: "ai" | "process" | "websocket" | "poll" | "network",
-  rawEvent: any
+  rawEvent: any,
+  commandId: string,
+  projectId?: string
 ): ObservabilityEvent {
   const seqCounter = createSeqCounter();
 
@@ -24,7 +26,13 @@ export function normalizeEvent(
     source,
     event: rawEvent.event || 'unknown',
     data: rawEvent.data || rawEvent,
-    message: rawEvent.message
+    message: rawEvent.message,
+    metadata: {
+      commandId,
+      projectId,
+      streamKind: rawEvent.streamKind || `${source}-raw`,
+      ...rawEvent.metadata
+    }
   };
 }
 

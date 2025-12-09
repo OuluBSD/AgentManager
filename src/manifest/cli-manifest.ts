@@ -120,6 +120,34 @@ export const CLI_MANIFEST: CLICommandEntry[] = [
     streaming: false
   },
   {
+    id: 'agent.chat.create',
+    path: ['agent', 'chat', 'create'],
+    description: 'Create a new chat',
+    args: [],
+    flags: [
+      { name: 'title', required: true, type: 'string' },
+      { name: 'note', required: false, type: 'string' },
+      { name: 'type', required: false, type: 'string', allowedValues: ['regular', 'meta'] },
+      { name: 'roadmap-id', required: false, type: 'string' }
+    ],
+    contextRequired: ['project', 'roadmap'],
+    streaming: false
+  },
+  {
+    id: 'agent.chat.send',
+    path: ['agent', 'chat', 'send'],
+    description: 'Send a message to the active chat',
+    args: [],
+    flags: [
+      { name: 'message', required: false, type: 'string' },
+      { name: 'stdin', required: false, type: 'boolean' },
+      { name: 'file', required: false, type: 'string' },
+      { name: 'role', required: false, type: 'string', allowedValues: ['user', 'assistant', 'system'] }
+    ],
+    contextRequired: ['project', 'roadmap', 'chat'],
+    streaming: false
+  },
+  {
     id: 'agent.chat.current',
     path: ['agent', 'chat', 'current'],
     description: 'Show the currently selected chat',
