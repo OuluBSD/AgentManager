@@ -145,16 +145,26 @@ export class MetaOrchestrateHandler implements CommandHandler {
       ? projectDir.replace('~', process.env.HOME || '')
       : projectDir;
 
+    // Check if directory exists, offer to create it if not
     if (!fs.existsSync(expandedDir)) {
-      throw new Error(`Directory does not exist: ${expandedDir}`);
+      const createDir = await this.prompt(`Directory does not exist: ${expandedDir}\nCreate it? (yes/no): `);
+      if (createDir.toLowerCase() === 'yes' || createDir.toLowerCase() === 'y') {
+        fs.mkdirSync(expandedDir, { recursive: true });
+        console.log(`Created directory: ${expandedDir}`);
+      } else {
+        throw new Error(`Directory does not exist: ${expandedDir}`);
+      }
     }
 
     const description = flags.description || await this.prompt('Project description: ');
     const minSteps = flags['min-steps'] || parseInt(await this.prompt('Minimum number of roadmap steps: '));
     const maxSteps = flags['max-steps'] || parseInt(await this.prompt('Maximum number of roadmap steps: '));
 
-    const buildModeInput = flags['build-mode'] || await this.prompt('Build mode (none/after-each): ');
-    const buildMode = buildModeInput === 'after-each' ? 'after-each' : 'none';
+    console.log('Build mode options:');
+    console.log('  1. none - do not build at all');
+    console.log('  2. after-each - after each phase, run a build command');
+    const buildModeInput = flags['build-mode'] || await this.prompt('Choose build mode (none/after-each) or enter 1/2: ');
+    const buildMode = (buildModeInput === 'after-each' || buildModeInput === '2') ? 'after-each' : 'none';
 
     let buildCommand: string | undefined;
     let fixUntilBuilds: boolean | undefined;
