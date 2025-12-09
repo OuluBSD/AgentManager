@@ -1067,6 +1067,23 @@ const COMMAND_SPECS: CommandSpec[] = [
       "file-name": { type: "string", required: false, description: "Custom filename for the probe file" }
     },
     contextRequired: ["activeProject"]
+  },
+  // Meta namespace commands
+  {
+    commandId: "meta.orchestrate",
+    namespace: "meta",
+    segments: ["orchestrate"],
+    args: {},
+    flags: {
+      "project-dir": { type: "string", required: false, description: "Project directory path" },
+      "description": { type: "string", required: false, description: "Project description" },
+      "min-steps": { type: "number", required: false, description: "Minimum number of roadmap steps" },
+      "max-steps": { type: "number", required: false, description: "Maximum number of roadmap steps" },
+      "build-mode": { type: "string", required: false, description: "Build mode (none/after-each)" },
+      "build-command": { type: "string", required: false, description: "Build command to run" },
+      "fix-until-builds": { type: "string", required: false, description: "Fix until builds (yes/no)" }
+    },
+    contextRequired: []
   }
 ];
 

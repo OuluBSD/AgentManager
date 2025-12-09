@@ -54,6 +54,9 @@ import { DebugLogSearchHandler } from './debug/log/search';
 import { SystemChatSmokeHandler } from './system/chat-smoke';
 import { SystemChatQwenProbeHandler } from './system/chat-qwen-probe';
 
+// Meta commands
+import { MetaOrchestrateHandler } from './meta/orchestrate';
+
 import { DebugWebSocketListHandler } from './debug/websocket/list';
 import { DebugWebSocketViewHandler } from './debug/websocket/view';
 import { DebugWebSocketStreamHandler } from './debug/websocket/stream';
@@ -143,6 +146,9 @@ export function registerCommandHandlers(): void {
   handlerRegistry.register('system.doctor', new SystemDoctorHandler());
   handlerRegistry.register('system.chat-smoke', new SystemChatSmokeHandler());
   handlerRegistry.register('system.chat-qwen-probe', new SystemChatQwenProbeHandler());
+
+  // Meta commands
+  handlerRegistry.register('meta.orchestrate', new MetaOrchestrateHandler());
 
   // Add more handlers as they are implemented
 }
