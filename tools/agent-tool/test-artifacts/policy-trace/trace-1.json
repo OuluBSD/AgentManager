@@ -1,0 +1,18 @@
+{
+  "actionId": "test-action-1",
+  "actionType": "run-command",
+  "timestamp": "2023-01-01T00:00:00Z",
+  "evaluatedRules": [
+    {
+      "ruleId": "test-rule",
+      "matched": true,
+      "matchReason": "Command 'ls' matches rule pattern 'ls'",
+      "priority": 100,
+      "effect": "allow"
+    }
+  ],
+  "finalDecision": "allow",
+  "finalRuleId": "test-rule",
+  "summaryForAI": "Action allowed based on policy evaluation",
+  "summaryForHuman": "Action: ls was allowed. Rule test-rule with mode allow was applied."
+}

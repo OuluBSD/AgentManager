@@ -16,6 +16,7 @@ interface OrchestrateConfig {
   buildMode: 'none' | 'after-each';
   buildCommand?: string;
   fixUntilBuilds?: boolean;
+  artifactRunDir?: string;
 }
 
 export class MetaOrchestrateHandler implements CommandHandler {
@@ -40,13 +41,31 @@ export class MetaOrchestrateHandler implements CommandHandler {
         fs.mkdirSync(metaWorkingDir, { recursive: true });
       }
 
+      // Prepare artifact directories if artifactRunDir is provided
+      let metaArtifactDir: string | undefined;
+      let stepArtifactDirs: string[] = [];
+      let buildArtifactDirs: { [key: string]: string[] } = {};
+
+      if (config.artifactRunDir) {
+        metaArtifactDir = path.join(config.artifactRunDir, 'meta');
+        fs.mkdirSync(metaArtifactDir, { recursive: true });
+
+        console.log(`Artifacts will be stored in: ${config.artifactRunDir}`);
+      }
+
       // Start meta session
       console.log(`\nStarting meta session: ${metaSessionId}`);
-      await this.runCommand('nexus-agent-tool', [
+      const metaStartArgs = [
         'start',
         '--session-id', metaSessionId,
         '--project-path', config.projectDir
-      ]);
+      ];
+
+      if (metaArtifactDir) {
+        metaStartArgs.push('--artifact-dir', metaArtifactDir);
+      }
+
+      await this.runCommand('nexus-agent-tool', metaStartArgs);
 
       // Generate roadmap using AI
       console.log('Generating roadmap using AI...\n');
@@ -74,32 +93,59 @@ export class MetaOrchestrateHandler implements CommandHandler {
         const childSessionId = `child-${i + 1}-${timestamp}`;
         childSessionIds.push(childSessionId);
 
+        // Prepare artifact directory for this step if artifactRunDir is provided
+        let stepArtifactDir: string | undefined;
+        if (config.artifactRunDir) {
+          stepArtifactDir = path.join(config.artifactRunDir, 'steps', `step-${i + 1}`);
+          fs.mkdirSync(stepArtifactDir, { recursive: true });
+          stepArtifactDirs.push(stepArtifactDir);
+        }
+
         console.log(`\n--- Step ${i + 1}/${steps.length}: ${step.title} ---`);
 
         // Start child session
-        await this.runCommand('nexus-agent-tool', [
+        const childStartArgs = [
           'start',
           '--session-id', childSessionId,
           '--project-path', config.projectDir
-        ]);
+        ];
+
+        if (stepArtifactDir) {
+          childStartArgs.push('--artifact-dir', stepArtifactDir);
+        }
+
+        await this.runCommand('nexus-agent-tool', childStartArgs);
 
         // Log step execution
-        await this.runCommand('nexus-agent-tool', [
+        const logArgs = [
           'log',
           '--session-id', metaSessionId,
           '--message', `Executing Step ${i + 1}`
-        ]);
+        ];
+
+        if (metaArtifactDir) {
+          logArgs.push('--artifact-dir', metaArtifactDir);
+        }
+
+        await this.runCommand('nexus-agent-tool', logArgs);
 
         // Execute step using AI
-        await this.executeStep(config, childSessionId, i + 1, step);
+        await this.executeStep(config, childSessionId, i + 1, step, stepArtifactDir);
 
         // Handle build if needed
         if (config.buildMode === 'after-each' && config.buildCommand) {
+          // Initialize build attempts array for this step if needed
+          if (config.artifactRunDir) {
+            buildArtifactDirs[childSessionId] = [];
+          }
+
           await this.handleBuild(
             config,
             childSessionId,
             metaSessionId,
-            i + 1
+            i + 1,
+            stepArtifactDir,
+            metaArtifactDir
           );
         }
 
@@ -139,6 +185,7 @@ export class MetaOrchestrateHandler implements CommandHandler {
 
   private async collectConfiguration(flags: any): Promise<OrchestrateConfig> {
     const projectDir = flags['project-dir'] || await this.prompt('Project directory path: ');
+    const artifactRunDir = flags['artifact-run-dir']; // Optional artifact run directory
 
     // Expand ~ if present
     const expandedDir = projectDir.startsWith('~')
@@ -182,7 +229,8 @@ export class MetaOrchestrateHandler implements CommandHandler {
       maxSteps,
       buildMode,
       buildCommand,
-      fixUntilBuilds
+      fixUntilBuilds,
+      artifactRunDir
     };
   }
 
@@ -293,7 +341,8 @@ Now create and write the roadmap.`;
     config: OrchestrateConfig,
     sessionId: string,
     stepNumber: number,
-    step: { title: string; description: string }
+    step: { title: string; description: string },
+    stepArtifactDir?: string
   ): Promise<void> {
     const prompt = `You are implementing Step ${stepNumber} of a project roadmap.
 
@@ -342,28 +391,50 @@ Now implement Step ${stepNumber} completely with full, working code.`;
     config: OrchestrateConfig,
     childSessionId: string,
     metaSessionId: string,
-    stepNumber: number
+    stepNumber: number,
+    stepArtifactDir?: string,
+    metaArtifactDir?: string
   ): Promise<void> {
     if (!config.buildCommand) return;
 
     console.log(`\nRunning build: ${config.buildCommand}`);
 
     try {
-      const result = await this.runCommand('nexus-agent-tool', [
+      let attempt = 1;
+      let exitCode = 0;
+      let result: { exitCode: number; stdout: string; stderr: string } | null = null;
+
+      // Run initial build
+      const buildArgs = [
         'run-command',
         '--session-id', childSessionId,
         '--cmd', config.buildCommand
-      ], { captureOutput: true });
+      ];
 
-      const exitCode = result.exitCode || 0;
+      if (stepArtifactDir) {
+        // Create a build artifact directory for this attempt
+        const buildAttemptDir = path.join(config.artifactRunDir!, 'build', `step-${stepNumber}-attempt-${attempt}`);
+        fs.mkdirSync(buildAttemptDir, { recursive: true });
+        buildArgs.push('--artifact-dir', buildAttemptDir);
+
+        // Track build attempts for this step
+        if (config.artifactRunDir) {
+          if (!buildArtifactDirs) buildArtifactDirs = {};
+          if (!buildArtifactDirs[childSessionId]) buildArtifactDirs[childSessionId] = [];
+          buildArtifactDirs[childSessionId].push(buildAttemptDir);
+        }
+      }
+
+      result = await this.runCommand('nexus-agent-tool', buildArgs, { captureOutput: true });
+      exitCode = result.exitCode || 0;
 
       if (exitCode !== 0 && config.fixUntilBuilds) {
         console.log('Build failed, attempting to fix...');
 
         const maxAttempts = 5;
-        let attempt = 1;
 
-        while (attempt <= maxAttempts) {
+        while (attempt < maxAttempts) {
+          attempt++;
           console.log(`Fix attempt ${attempt}/${maxAttempts}`);
 
           const fixPrompt = `Build failed with the following output:
@@ -379,26 +450,49 @@ Use nexus-agent-tool with session ID: ${childSessionId}`;
           await this.runQwen(config.projectDir, fixPrompt);
 
           // Test build again
-          const retryResult = await this.runCommand('nexus-agent-tool', [
+          const retryArgs = [
             'run-command',
             '--session-id', childSessionId,
             '--cmd', config.buildCommand
-          ], { captureOutput: true });
+          ];
+
+          if (stepArtifactDir) {
+            // Create a build artifact directory for this attempt
+            const buildAttemptDir = path.join(config.artifactRunDir!, 'build', `step-${stepNumber}-attempt-${attempt}`);
+            fs.mkdirSync(buildAttemptDir, { recursive: true });
+            retryArgs.push('--artifact-dir', buildAttemptDir);
+
+            // Track build attempts for this step
+            if (config.artifactRunDir) {
+              if (!buildArtifactDirs) buildArtifactDirs = {};
+              if (!buildArtifactDirs[childSessionId]) buildArtifactDirs[childSessionId] = [];
+              buildArtifactDirs[childSessionId].push(buildAttemptDir);
+            }
+          }
+
+          const retryResult = await this.runCommand('nexus-agent-tool', retryArgs, { captureOutput: true });
 
           if ((retryResult.exitCode || 0) === 0) {
             console.log(`✓ Build succeeded after ${attempt} attempt(s)`);
             return;
           }
 
-          attempt++;
+          result = retryResult;
         }
 
         console.log(`✗ Build still failing after ${maxAttempts} attempts`);
-        await this.runCommand('nexus-agent-tool', [
+
+        const logArgs = [
           'log',
           '--session-id', metaSessionId,
           '--message', `Build failed after ${maxAttempts} attempts for Step ${stepNumber}`
-        ]);
+        ];
+
+        if (metaArtifactDir) {
+          logArgs.push('--artifact-dir', metaArtifactDir);
+        }
+
+        await this.runCommand('nexus-agent-tool', logArgs);
       } else if (exitCode === 0) {
         console.log('✓ Build succeeded');
       }

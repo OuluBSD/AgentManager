@@ -30,7 +30,9 @@ export class ChatViewHandler implements CommandHandler {
       }
 
       return {
-        chat: response.data.chat
+        chat: response.data.chat,
+        projectId: null, // Project ID would require additional API call to get roadmap details
+        roadmapId: response.data.chat.roadmapRef || null  // Include parent roadmap ID
       };
     } catch (error) {
       throw new Error(`Failed to view chat: ${(error as Error).message}`);

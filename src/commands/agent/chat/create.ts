@@ -18,11 +18,15 @@ export class ChatCreateHandler implements CommandHandler {
         throw new Error('An active roadmap is required to create a chat');
       }
 
+      // Extract type from context flags
+      const { type } = context.flags;
+
       // Call API to create chat
       const response = await API_CLIENT.createChat({
         name: title || 'New Chat',
         description: note || 'Created via CLI',
-        roadmapId: roadmapId
+        roadmapId: roadmapId,
+        type: type || 'regular'  // Default to 'regular' if not specified
       });
 
       if (response.status === 'error') {
@@ -51,6 +55,11 @@ export class ChatCreateHandler implements CommandHandler {
   validate(args: any): any {
     if (!args.title) {
       throw new Error('Chat title is required');
+    }
+
+    // Validate the type if provided
+    if (args.type && !['regular', 'meta'].includes(args.type)) {
+      throw new Error('Chat type must be either "regular" or "meta"');
     }
 
     return {

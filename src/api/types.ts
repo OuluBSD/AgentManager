@@ -125,6 +125,7 @@ export interface ChatSummary {
   progress: number;
   note: string;
   meta: boolean;
+  type: 'regular' | 'meta';  // Indicates chat type: regular or meta
 }
 
 export interface ChatDetails {
@@ -134,6 +135,7 @@ export interface ChatDetails {
   progress: number;
   note: string;
   meta: boolean;
+  type: 'regular' | 'meta';  // Indicates chat type: regular or meta
   messages?: {
     id: number;
     role: string;

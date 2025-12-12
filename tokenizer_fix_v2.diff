@@ -1,0 +1,89 @@
+diff --git a/src/parser/tokenizer.ts b/src/parser/tokenizer.ts
+index 9247b38..338a6c9 100644
+--- a/src/parser/tokenizer.ts
++++ b/src/parser/tokenizer.ts
+@@ -6,6 +6,30 @@ export type TokenResult = Token[] | TokenError;
+ 
+ export class Tokenizer {
+   private input: string = '';
++  private equalsAssignmentMode = false;
+   private position: number = 0;
+ 
+   tokenize(input: string): TokenResult {
+@@ -26,6 +49,7 @@ export class Tokenizer {
+ 
+     while (this.position < this.input.length) {
+       // Skip whitespace
++      this.equalsAssignmentMode = false;
+       while (this.position < this.input.length && /\s/.test(this.input[this.position] || '')) {
+         this.position++;
+       }
+@@ -42,6 +66,11 @@ export class Tokenizer {
+       if ('error' in token) {
+         return token; // Return error immediately
+       }
+ 
++      // If this token follows an equals sign assignment, mark it specially
++      if (token.type === 'EQUALS') {
++        this.equalsAssignmentMode = true;
++      }
++
+       tokens.push(token);
+     }
+ 
+@@ -57,11 +85,21 @@ export class Tokenizer {
+     const currentChar = this.input[this.position];
+     if (currentChar === '-') {
+       if (this.position + 1 < this.input.length && this.input[this.position + 1] === '-') {
++        // If we're processing a value after flag assignment (either --flag=value or --flag value), 
++        // and we encounter a pattern that looks like a flag, treat it as a plain word
++        if (this.equalsAssignmentMode) {
++          // We're in a situation like --message="Build Status: success, Test Status: success"
++          // which has been split by the shell, so we're processing "Build Status: success, Test Status: success"
++          // In this case, just grab everything until the end
++          return this.readRemainingAsValue();
++        }
++
+         // Long flag: --flagname
+         this.position += 2; // Skip --
+         let flagName = '';
+@@ -69,13 +107,23 @@ export class Tokenizer {
+         }
+ 
+         return {
+-          type: 'FLAG',
++          type: this.equalsAssignmentMode ? 'WORD' : 'FLAG',
+           value: flagName,
+           position: startPos,
+           raw: `--${flagName}`
+         };
+       } else {
++        // Short flag: -f
++        if (this.equalsAssignmentMode) {
++          // If we're in an equals assignment context, treat this as part of the value
++          return this.readRemainingAsValue();
++        }
++
+         // Short flag: -f
+         this.position++; // Skip -
+@@ -147,6 +195,22 @@ export class Tokenizer {
+     }
+   }
+ 
++  private readRemainingAsValue(): Token {
++    // If we're in equals assignment mode, read everything until whitespace
++    const startPos = this.position;
++    let tokenValue = '';
++
++    while (this.position < this.input.length && 
++           !/\s/.test(this.input[this.position] || '')) {
++      tokenValue += this.input[this.position];
++      this.position++;
++    }
++
++    return { type: 'STRING', value: tokenValue, position: startPos, raw: tokenValue };
++  }
++
+   // Check for equals sign
+   if (currentChar === '=') {
+     this.position++;

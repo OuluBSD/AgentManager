@@ -1,0 +1,39 @@
+{
+  "projectId": "unknown-project",
+  "summary": {
+    "weakerCount": 0,
+    "strongerCount": 0,
+    "contradictions": 0,
+    "unchanged": 1,
+    "weakenedActions": [],
+    "strengthenedActions": [],
+    "contradictionDetails": []
+  },
+  "actions": [
+    {
+      "actionId": "test-action-1",
+      "originalDecision": "ALLOW",
+      "simulatedDecision": "ALLOW",
+      "difference": "same",
+      "simulatedTrace": {
+        "actionId": "act-87f4327f-c611-48c0-a396-911a06aa846d",
+        "actionType": "run-command",
+        "timestamp": "2025-12-10T21:29:27.311Z",
+        "evaluatedRules": [
+          {
+            "ruleId": "test-rule",
+            "matched": true,
+            "matchReason": "Command 'ls was allowed. Rule test-rule with mode allow was applied.' matches rule pattern 'ls'",
+            "priority": 100,
+            "effect": "allow"
+          }
+        ],
+        "finalDecision": "allow",
+        "finalRuleId": "test-rule",
+        "summaryForAI": "Action allowed based on policy evaluation",
+        "summaryForHuman": "Action was allowed. Rule test-rule with mode allow was applied."
+      }
+    }
+  ],
+  "narrativeSummary": "Counterfactual Policy Simulation Results for Project: unknown-project\nTimeframe: 2025-12-09T21:29:27.308Z to 2025-12-10T21:29:27.308Z\n\nTotal actions analyzed: 1\n- Unchanged: 1 (100.0%)\n- Weakened: 0 (0.0%) - alternate policy is more permissive\n- Strengthened: 0 (0.0%) - alternate policy is more restrictive\n- Contradictions: 0 (0.0%) - major policy differences\n\nThe alternate policy shows balanced changes compared to the original policy.\n\nOverall Governance Assessment:\n- LOW RISK: No contradictions detected in the simulation.\n"
+}

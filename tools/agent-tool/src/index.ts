@@ -13,6 +13,8 @@ import { reviewPolicyCommand } from './commands/review-policy';
 import { detectDriftCommand } from './commands/detect-drift';
 import { simulatePolicyCommand } from './commands/simulate-policy';
 import { forecastPolicyCommand } from './commands/forecast-policy';
+import { autopilotCycleCommand } from './commands/autopilot-cycle';
+import { makeRunbookCommand } from './commands/make-runbook';
 
 async function run() {
   const argv = await yargs(hideBin(process.argv))
@@ -33,6 +35,8 @@ async function run() {
     .command(detectDriftCommand)
     .command(simulatePolicyCommand)
     .command(forecastPolicyCommand)
+    .command(autopilotCycleCommand)
+    .command(makeRunbookCommand)
     .demandCommand(1, 'A command is required')
     .strict()
     .alias('h', 'help')

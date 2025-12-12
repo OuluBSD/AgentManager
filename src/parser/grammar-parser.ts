@@ -189,8 +189,36 @@ export class GrammarParser {
             const nextToken = this.tokens[this.position];
             if (nextToken && nextToken.type !== 'FLAG') {
               // Format: --flag value (assign value to flag)
-              flagValue = nextToken.value;
-              this.position++; // Consume the value token
+              // For message-like flags, we want to consume all subsequent non-flag tokens until we hit another flag
+              const messageFlagNames = ['message', 'text', 'content']; // Flags that should consume multiple tokens
+
+              if (messageFlagNames.includes(flagName)) {
+                // Check if the value is already a STRING type (quoted), in which case just use it
+                if (nextToken.type === 'STRING') {
+                  flagValue = nextToken.value;
+                  this.position++; // Consume the STRING token
+                } else {
+                  // For unquoted message-like flags, collect all tokens until we hit another flag or end of tokens
+                  const values: string[] = [nextToken.value]; // Start with the first token
+                  this.position++; // Consume the first token after the flag
+
+                  // Continue collecting tokens until we hit another flag
+                  while (this.position < this.tokens.length) {
+                    const currentToken = this.tokens[this.position];
+                    if (!currentToken || currentToken.type === 'FLAG') {
+                      break; // Stop if we hit another flag
+                    }
+                    values.push(currentToken.value);
+                    this.position++;
+                  }
+                  // Join the values with spaces to form the complete message
+                  flagValue = values.join(' ');
+                }
+              } else {
+                // For other flags, just take the next token as before
+                flagValue = nextToken.value;
+                this.position++; // Consume the value token
+              }
             }
           }
         }

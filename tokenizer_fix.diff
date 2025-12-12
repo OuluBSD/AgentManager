@@ -1,0 +1,29 @@
+diff --git a/src/parser/tokenizer.ts b/src/parser/tokenizer.ts
+index 9247b38..080e55b 100644
+--- a/src/parser/tokenizer.ts
++++ b/src/parser/tokenizer.ts
+@@ -59,7 +59,23 @@ export class Tokenizer {
+         };
+      } else {
+        // Short flag: -f
+-       this.position++; // Skip -
++       // Check if this might be part of a word after an equals sign
++       // Look for the most recent equals sign in the input
++       const lastEqualsIndex = this.input.lastIndexOf('=', this.position);
++       if (lastEqualsIndex !== -1 && lastEqualsIndex > startPos) {
++         // If we're after an equals sign, treat this as part of the value, not a flag
++         let tokenValue = '';
++         while (this.position < this.input.length &&
++                !/\s/.test(this.input[this.position] || '') &&
++                (this.input[this.position] || '') !== '=' &&
++                (this.input[this.position] || '') !== '"' &&
++                (this.input[this.position] || '') !== "'") {
++           tokenValue += this.input[this.position];
++           this.position++;
++         }
++         return { type: 'STRING', value: tokenValue, position: startPos, raw: tokenValue };
++       }
++       this.position++; // Skip -
+        if (this.position >= this.input.length || !/[a-zA-Z0-9]/.test(this.input[this.position] || '')) {
+          return {
+            error: true,

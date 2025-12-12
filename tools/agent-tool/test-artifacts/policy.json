@@ -1,0 +1,11 @@
+{
+  "commands": [
+    {
+      "id": "test-rule",
+      "pattern": "ls",
+      "mode": "allow",
+      "priority": 100
+    }
+  ],
+  "defaultCommandBehavior": "allow"
+}

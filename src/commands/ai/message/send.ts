@@ -6,13 +6,57 @@ import { ContextManager } from '../../../state/context-manager';
 import { SessionManager } from '../../../session/session-manager';
 import { API_CLIENT } from '../../../api/client';
 import { AiTokenEvent } from '../../../api/types';
+import * as fs from 'fs/promises';
+import * as process from 'process';
 
 export class AIMessageSendHandler {
   async execute(context: ExecutionContext): Promise<CommandResult | AsyncGenerator<any>> {
     try {
       const { flags } = context;
-      const text = flags.text;
+      const { text, stdin: readStdin, file } = flags;
       let sessionId = flags.sessionId;
+
+      // Determine the message content based on input method
+      let messageContent: string;
+
+      if (file) {
+        // Read message from file
+        try {
+          messageContent = await fs.readFile(file, 'utf8');
+        } catch (error) {
+          return {
+            status: 'error',
+            data: null,
+            message: `Failed to read message from file ${file}: ${(error as Error).message}`,
+            errors: [{
+              type: 'FILE_READ_ERROR',
+              message: (error as Error).message,
+              details: { file }
+            } as CommandError]
+          };
+        }
+      } else if (readStdin) {
+        // Read message from stdin
+        const chunks: Buffer[] = [];
+        for await (const chunk of process.stdin) {
+          chunks.push(chunk);
+        }
+        messageContent = Buffer.concat(chunks).toString('utf8');
+      } else if (text !== undefined) {
+        // Use the text flag value
+        messageContent = text;
+      } else {
+        // This should not happen due to validation, but as a fallback
+        return {
+          status: 'error',
+          data: null,
+          message: 'No message content provided. Use --text, --stdin, or --file flag.',
+          errors: [{
+            type: 'MISSING_MESSAGE_CONTENT',
+            message: 'No message content provided'
+          } as CommandError]
+        };
+      }
 
       // Get the selected AI session if no specific session ID was provided
       if (!sessionId) {
@@ -52,10 +96,10 @@ export class AIMessageSendHandler {
       }
 
       // Add user message to the session
-      await sessionManager.appendMessage(sessionId, 'user', text);
+      await sessionManager.appendMessage(sessionId, 'user', messageContent);
 
       // Create a streaming generator to send the message and receive response
-      const generator = API_CLIENT.sendAiChatMessage(sessionId, text);
+      const generator = API_CLIENT.sendAiChatMessage(sessionId, messageContent);
 
       // Return the raw generator, allowing the runtime to handle UOL wrapping
       return generator;
@@ -73,7 +117,7 @@ export class AIMessageSendHandler {
   }
 
   validate(args: any): any {
-    // No additional validation needed beyond what's in the validator
+    // No additional validation needed beyond what's in the parser validator
     return { valid: true, errors: [] };
   }
 }
